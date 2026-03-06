@@ -3,8 +3,9 @@ import {
   ShoppingCart, ArrowRightLeft, Loader2, CheckCircle, AlertCircle,
   RefreshCw, Zap, Search, Star, Heart, Send, X,
   TrendingUp, Users, Globe, BarChart3, Cpu, Database, Shield,
-  Megaphone, DollarSign, Briefcase, ChevronDown, ChevronUp,
-  MessageSquare, Plus, CheckCheck, Clock, Award
+  DollarSign, Briefcase, ChevronDown, ChevronUp,
+  MessageSquare, Plus, CheckCheck, Clock, Award, Download,
+  Trophy, Activity
 } from "lucide-react";
 import { Layout } from "../components/Layout";
 import { supabase, supabaseConfigured } from "../lib/supabase";
@@ -19,6 +20,10 @@ interface Agent {
   endpoint: string; plan_did?: string; status: string; source?: string;
   validation_score?: number | null; badge_tier?: string | null;
   validated_at?: string | null; zeroclick_context?: string | null;
+  // ABTS Trust Score fields
+  abts_score?: number | null; abts_tier?: string | null;
+  abts_components?: { R: number; P: number; V: number; S: number; c_conf: number } | null;
+  interaction_count?: number; rating_sum?: number; rating_count?: number;
 }
 interface Transaction {
   id: string; from_agent_id: string; to_agent_id: string;
@@ -64,15 +69,6 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function badgeStyle(tier?: string | null) {
-  switch (tier) {
-    case "platinum": return "bg-purple-500/20 text-purple-300 border border-purple-500/40";
-    case "gold":     return "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40";
-    case "silver":   return "bg-slate-400/20 text-slate-300 border border-slate-400/30";
-    case "bronze":   return "bg-orange-500/20 text-orange-300 border border-orange-500/40";
-    default:         return "bg-red-500/10 text-red-400 border border-red-500/20";
-  }
-}
 function scoreColor(score?: number | null) {
   if (!score) return "text-slate-500";
   if (score >= 90) return "text-purple-400";
@@ -80,6 +76,21 @@ function scoreColor(score?: number | null) {
   if (score >= 50) return "text-blue-400";
   if (score >= 25) return "text-orange-400";
   return "text-red-400";
+}
+function abtsTierStyle(tier?: string | null) {
+  switch (tier) {
+    case "Elite":    return { bg: "bg-purple-500/20 border-purple-500/40 text-purple-300", icon: "🏆", glow: "shadow-purple-500/20" };
+    case "Trusted":  return { bg: "bg-yellow-500/20 border-yellow-500/40 text-yellow-300", icon: "⭐", glow: "shadow-yellow-500/20" };
+    case "Verified": return { bg: "bg-blue-500/20 border-blue-500/40 text-blue-300",        icon: "✓",  glow: "shadow-blue-500/20"   };
+    default:         return { bg: "bg-slate-700/50 border-slate-600/30 text-slate-400",      icon: "◦",  glow: ""                     };
+  }
+}
+function abtsScoreColor(score?: number | null) {
+  if (score == null || score === 0) return "text-slate-500";
+  if (score >= 80) return "text-purple-400";
+  if (score >= 60) return "text-yellow-400";
+  if (score >= 35) return "text-blue-400";
+  return "text-slate-500";
 }
 function statusColor(status: number) {
   if (status >= 200 && status < 300) return "text-green-400";
@@ -112,8 +123,11 @@ export default function Marketplace() {
   const [actionResult, setActionResult] = useState<{ id: string; type: string; success: boolean; msg: string } | null>(null);
   const [matchModal, setMatchModal]     = useState<{ agent: Agent; data: MatchResult } | null>(null);
   const [validating, setValidating]     = useState(false);
+  const [syncing, setSyncing]           = useState(false);
+  const [syncResult, setSyncResult]     = useState<string | null>(null);
   const [newTxIds, setNewTxIds]         = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab]       = useState<"directory"|"transactions"|"proposals"|"jobboard">("directory");
+  const [activeTab, setActiveTab]       = useState<"directory"|"transactions"|"proposals"|"jobboard"|"abts">("directory");
+  const [abtsTierFilter, setAbtsTierFilter] = useState<"All"|"Elite"|"Trusted"|"Verified"|"New">("All");
 
   // Job Board state
   const [expandedProposal, setExpandedProposal] = useState<string | null>(null);
@@ -124,6 +138,9 @@ export default function Marketplace() {
   const [msgModal, setMsgModal]                 = useState<JobProposal | null>(null);
   const [jobLoading, setJobLoading]             = useState(false);
   const [jobStatusFilter, setJobStatusFilter]   = useState<"open"|"funded"|"all">("open");
+  const [abtsLeaderboard, setAbtsLeaderboard]   = useState<Agent[]>([]);
+  const [abtsLoading, setAbtsLoading]           = useState(false);
+  const [abtsTierTab, setAbtsTierTab]           = useState<string>("All");
 
   // ── Fetch fns ─────────────────────────────────────────────────────────────
   const fetchAgents = useCallback(async () => {
@@ -161,6 +178,16 @@ export default function Marketplace() {
     } catch { /**/ }
   }, []);
 
+  const fetchAbtsLeaderboard = useCallback(async (tier?: string) => {
+    setAbtsLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "30" });
+      if (tier && tier !== "All") params.set("tier", tier);
+      const res = await fetch(`${API_URL}/marketplace/abts-leaderboard?${params}`);
+      if (res.ok) setAbtsLeaderboard(await res.json());
+    } catch { /**/ } finally { setAbtsLoading(false); }
+  }, []);
+
   const fetchJobProposals = useCallback(async () => {
     setJobLoading(true);
     try {
@@ -192,6 +219,7 @@ export default function Marketplace() {
   useEffect(() => { fetchAgents(); }, [fetchAgents]);
   useEffect(() => { fetchTransactions(); fetchProposals(); }, [fetchTransactions, fetchProposals]);
   useEffect(() => { if (activeTab === "jobboard") fetchJobProposals(); }, [activeTab, fetchJobProposals]);
+  useEffect(() => { if (activeTab === "abts") fetchAbtsLeaderboard(abtsTierTab); }, [activeTab, abtsTierTab, fetchAbtsLeaderboard]);
   useEffect(() => { const t = setTimeout(() => fetchAgents(), 400); return () => clearTimeout(t); }, [search]);
 
   // Realtime
@@ -291,6 +319,41 @@ export default function Marketplace() {
     finally { setValidating(false); }
   }
 
+  async function handleRate(agent: Agent, stars: number) {
+    try {
+      const res = await fetch(`${API_URL}/marketplace/rate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agent.id, rating: stars, rater_id: "marketplace-user" }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setAgents(prev => prev.map(a => a.id === agent.id ? {
+          ...a,
+          abts_score: d.abts_score,
+          abts_tier: d.abts_tier,
+          rating_count: d.total_ratings,
+          rating_sum: d.avg_rating * d.total_ratings,
+        } : a));
+      }
+    } catch { /**/ }
+  }
+
+  async function handleSync() {
+    setSyncing(true); setSyncResult(null);
+    try {
+      const res = await fetch(`${API_URL}/marketplace/sync-agents`, { method: "POST" });
+      if (res.ok) {
+        const d = await res.json();
+        setSyncResult(`✅ Synced ${d.synced} new agents (${d.total_agents} total). ABTS recalculating…`);
+        setTimeout(() => { fetchAgents(); setSyncResult(null); }, 3000);
+      } else {
+        setSyncResult("❌ Sync failed — check backend logs");
+      }
+    } catch (e) {
+      setSyncResult(`❌ ${(e as Error).message}`);
+    } finally { setSyncing(false); }
+  }
+
   async function handleAcceptBid(proposalId: string, bidId: string) {
     try {
       const res = await fetch(`${API_URL}/proposals/${proposalId}/accept`, {
@@ -308,6 +371,7 @@ export default function Marketplace() {
   // ── Filtered agents ────────────────────────────────────────────────────────
   const filtered = agents.filter(a => {
     if (category !== "All" && !(a.category || "").toLowerCase().includes(category.toLowerCase())) return false;
+    if (abtsTierFilter !== "All" && (a.abts_tier || "New") !== abtsTierFilter) return false;
     if (search) {
       const s = search.toLowerCase();
       return (a.name + a.description + (a.team_name || "") + (a.category || "")).toLowerCase().includes(s);
@@ -317,11 +381,21 @@ export default function Marketplace() {
   const ourAgents = filtered.filter(a => a.source === "agentbazaar");
   const mktAgents = filtered.filter(a => a.source !== "agentbazaar");
 
+  // ABTS tier counts for filter pills
+  const tierCounts = {
+    All:      agents.length,
+    Elite:    agents.filter(a => a.abts_tier === "Elite").length,
+    Trusted:  agents.filter(a => a.abts_tier === "Trusted").length,
+    Verified: agents.filter(a => a.abts_tier === "Verified").length,
+    New:      agents.filter(a => !a.abts_tier || a.abts_tier === "New").length,
+  };
+
   const openProposals  = jobProposals.filter(p => p.status === "open").length;
   const fundedProposals = jobProposals.filter(p => p.status === "funded").length;
 
   const tabCounts = {
     directory:    agents.length,
+    abts:         agents.filter(a => a.abts_score && a.abts_score > 0).length,
     transactions: transactions.length,
     proposals:    proposals.length,
     jobboard:     jobProposals.length,
@@ -340,22 +414,35 @@ export default function Marketplace() {
               {agents.length} agents · {transactions.length} cross-team txns · {openProposals} open jobs · {fundedProposals} funded
             </p>
           </div>
-          <div className="flex gap-2">
-            {activeTab === "jobboard" && (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-2">
+              {activeTab === "jobboard" && (
+                <button
+                  onClick={() => setShowPostModal(true)}
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors whitespace-nowrap"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Post Job
+                </button>
+              )}
               <button
-                onClick={() => setShowPostModal(true)}
-                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors whitespace-nowrap"
+                onClick={handleSync} disabled={syncing}
+                title="Pull real hackathon agents from Nevermined portal"
+                className="flex items-center gap-2 rounded-lg bg-teal-600 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-500 disabled:opacity-50 transition-colors whitespace-nowrap"
               >
-                <Plus className="h-3.5 w-3.5" /> Post Job
+                {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                Sync Agents
               </button>
+              <button
+                onClick={handleValidateAll} disabled={validating}
+                className="flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-500 disabled:opacity-50 transition-colors whitespace-nowrap"
+              >
+                {validating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+                Validate All
+              </button>
+            </div>
+            {syncResult && (
+              <p className="text-xs text-teal-400">{syncResult}</p>
             )}
-            <button
-              onClick={handleValidateAll} disabled={validating}
-              className="flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-500 disabled:opacity-50 transition-colors whitespace-nowrap"
-            >
-              {validating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-              Validate All
-            </button>
           </div>
         </div>
 
@@ -363,6 +450,7 @@ export default function Marketplace() {
         <div className="flex gap-1 border-b border-[#2a2d3a] overflow-x-auto">
           {([
             { key: "directory",    label: "Directory",     icon: <Globe className="h-3.5 w-3.5" /> },
+            { key: "abts",         label: "ABTS Trust",    icon: <Trophy className="h-3.5 w-3.5" /> },
             { key: "jobboard",     label: "Job Board",     icon: <Briefcase className="h-3.5 w-3.5" /> },
             { key: "transactions", label: "Transactions",  icon: <ArrowRightLeft className="h-3.5 w-3.5" /> },
             { key: "proposals",    label: "Outreach",      icon: <Send className="h-3.5 w-3.5" /> },
@@ -463,6 +551,123 @@ export default function Marketplace() {
           </div>
         )}
 
+        {/* ── ABTS TRUST LEADERBOARD TAB ── */}
+        {activeTab === "abts" && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-purple-500/20 bg-gradient-to-br from-[#1a1d27] to-purple-950/10 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Trophy className="h-5 w-5 text-purple-400" />
+                <h3 className="text-sm font-bold text-white">Agent Bazaar Trust Score (ABTS)</h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                <span className="font-mono text-purple-300">ABTS = C_conf × [0.35·R + 0.30·P + 0.15·V + 0.20·S]</span>
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+                {[
+                  { label:"R — Reputation", desc:"Bayesian star ratings + interactions", color:"text-pink-400" },
+                  { label:"P — Performance", desc:"Uptime + completion + error rate", color:"text-blue-400" },
+                  { label:"V — Verification", desc:"Claude validation pipeline score", color:"text-green-400" },
+                  { label:"S — Stability", desc:"Agent age + consistency metrics", color:"text-yellow-400" },
+                ].map(p => (
+                  <div key={p.label} className="rounded-lg bg-[#0f1117] border border-[#2a2d3a] p-2.5">
+                    <div className={`text-xs font-semibold ${p.color}`}>{p.label}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{p.desc}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 mt-3 flex-wrap">
+                {(["All","Elite","Trusted","Verified","New"] as const).map(tier => {
+                  const ts = abtsTierStyle(tier === "All" ? null : tier);
+                  return (
+                    <button key={tier}
+                      onClick={() => setAbtsTierTab(tier)}
+                      className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
+                        abtsTierTab === tier
+                          ? (tier === "All" ? "bg-blue-600 text-white border-blue-600" : `${ts.bg}`)
+                          : "bg-[#1a1d27] text-slate-400 border-[#2a2d3a] hover:text-slate-200"
+                      }`}
+                    >
+                      {tier !== "All" && <span>{ts.icon}</span>} {tier}
+                      {tier !== "All" && <span className="text-slate-600">({tierCounts[tier] ?? 0})</span>}
+                    </button>
+                  );
+                })}
+                <button onClick={() => fetchAbtsLeaderboard(abtsTierTab)} className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">
+                  <RefreshCw className="h-3 w-3" /> Refresh
+                </button>
+              </div>
+            </div>
+
+            {abtsLoading ? (
+              <div className="flex items-center gap-2 text-slate-500 text-sm py-12 justify-center">
+                <Loader2 className="h-5 w-5 animate-spin" /> Calculating trust scores…
+              </div>
+            ) : abtsLeaderboard.length === 0 ? (
+              <div className="rounded-xl border border-[#2a2d3a] bg-[#1a1d27] p-12 text-center">
+                <Trophy className="h-8 w-8 text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-400 text-sm">No scored agents yet.</p>
+                <p className="text-slate-600 text-xs mt-1">Click "Sync Agents" then "Validate All" to populate scores.</p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[#2a2d3a] bg-[#1a1d27] overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[#2a2d3a]">
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase w-8">#</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Agent</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase hidden md:table-cell">Team</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">ABTS</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Tier</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase hidden md:table-cell">Val</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase hidden lg:table-cell">R·P·V·S</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {abtsLeaderboard.map((agent, i) => {
+                      const ts = abtsTierStyle(agent.abts_tier);
+                      const comps = agent.abts_components;
+                      return (
+                        <tr key={agent.id} className="border-b border-[#2a2d3a] last:border-0 hover:bg-white/[0.02] transition-colors">
+                          <td className="px-4 py-3 text-xs text-slate-600 font-mono">{i + 1}</td>
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-white text-sm truncate max-w-[180px]">{agent.name}</div>
+                            {agent.category && <div className="text-xs text-slate-500">{agent.category}</div>}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-400 hidden md:table-cell max-w-[120px] truncate">
+                            {agent.team_name || "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <span className={`text-base font-bold tabular-nums ${abtsScoreColor(agent.abts_score)}`}>
+                              {(agent.abts_score ?? 0).toFixed(0)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium border ${ts.bg}`}>
+                              {ts.icon} {agent.abts_tier || "New"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right hidden md:table-cell">
+                            <span className={`text-xs font-mono ${scoreColor(agent.validation_score)}`}>
+                              {agent.validation_score ?? "—"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right hidden lg:table-cell">
+                            {comps ? (
+                              <span className="text-xs text-slate-600 font-mono">
+                                {comps.R?.toFixed(0)}·{comps.P?.toFixed(0)}·{comps.V?.toFixed(0)}·{comps.S?.toFixed(0)}
+                              </span>
+                            ) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── DIRECTORY TAB ── */}
         {activeTab === "directory" && (
           <div className="space-y-5">
@@ -489,6 +694,28 @@ export default function Marketplace() {
                   </button>
                 ))}
               </div>
+              {/* ABTS Trust Tier filter */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-600 flex items-center gap-1"><Activity className="h-3 w-3" />ABTS Trust:</span>
+                {(["All","Elite","Trusted","Verified","New"] as const).map(tier => {
+                  const ts = abtsTierStyle(tier === "All" ? null : tier);
+                  return (
+                    <button
+                      key={tier}
+                      onClick={() => setAbtsTierFilter(tier)}
+                      className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors border ${
+                        abtsTierFilter === tier
+                          ? (tier === "All" ? "bg-blue-600 text-white border-blue-600" : `${ts.bg} border-2`)
+                          : "bg-[#1a1d27] text-slate-400 border-[#2a2d3a] hover:text-slate-200"
+                      }`}
+                    >
+                      {tier !== "All" && <span>{ts.icon}</span>}
+                      {tier}
+                      <span className="ml-0.5 text-slate-500 text-xs">({tierCounts[tier]})</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {loading ? (
@@ -506,7 +733,7 @@ export default function Marketplace() {
                     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                       {ourAgents.map(agent => (
                         <AgentCard key={agent.id} agent={agent} actingId={actingId} actionResult={actionResult}
-                          onBuy={handleBuy} onPropose={handlePropose} onMatch={handleMatch} highlight />
+                          onBuy={handleBuy} onPropose={handlePropose} onMatch={handleMatch} onRate={handleRate} highlight />
                       ))}
                     </div>
                   </div>
@@ -519,6 +746,17 @@ export default function Marketplace() {
                         <h3 className="text-sm font-semibold text-white">
                           Nevermined Hackathon Agents <span className="text-slate-500 font-normal">({mktAgents.length})</span>
                         </h3>
+                        {/* ABTS legend */}
+                        <div className="flex items-center gap-2 ml-2 hidden md:flex">
+                          {(["Elite","Trusted","Verified","New"] as const).map(t => {
+                            const s = abtsTierStyle(t);
+                            return (
+                              <span key={t} className={`rounded-full px-1.5 py-0.5 text-xs border ${s.bg}`}>
+                                {s.icon} {t}
+                              </span>
+                            );
+                          })}
+                        </div>
                       </div>
                       <button onClick={fetchAgents} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">
                         <RefreshCw className="h-3 w-3" /> Refresh
@@ -527,7 +765,7 @@ export default function Marketplace() {
                     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                       {mktAgents.map(agent => (
                         <AgentCard key={agent.id} agent={agent} actingId={actingId} actionResult={actionResult}
-                          onBuy={handleBuy} onPropose={handlePropose} onMatch={handleMatch} />
+                          onBuy={handleBuy} onPropose={handlePropose} onMatch={handleMatch} onRate={handleRate} />
                       ))}
                     </div>
                   </div>
@@ -1100,36 +1338,94 @@ function SendMessageModal({ proposal, onClose, onSent }: {
 }
 
 // ─── Agent Card ───────────────────────────────────────────────────────────────
-function AgentCard({ agent, actingId, actionResult, onBuy, onPropose, onMatch, highlight }: {
+function AgentCard({ agent, actingId, actionResult, onBuy, onPropose, onMatch, onRate, highlight }: {
   agent: Agent; actingId: string | null;
   actionResult: { id: string; type: string; success: boolean; msg: string } | null;
   onBuy: (a: Agent) => void; onPropose: (a: Agent) => void; onMatch: (a: Agent) => void;
+  onRate?: (a: Agent, stars: number) => void;
   highlight?: boolean;
 }) {
-  const isActing = actingId === agent.id || actingId === agent.id + "-match";
-  const result   = actionResult?.id === agent.id ? actionResult : null;
+  const isActing  = actingId === agent.id || actingId === agent.id + "-match";
+  const result    = actionResult?.id === agent.id ? actionResult : null;
+  const ts        = abtsTierStyle(agent.abts_tier);
+  const abtsScore = agent.abts_score ?? 0;
+  const avgRating = agent.rating_count && agent.rating_count > 0
+    ? (((agent.rating_sum ?? 0) / agent.rating_count)).toFixed(1)
+    : null;
+
   return (
     <div className={`rounded-xl border flex flex-col gap-3 p-4 transition-colors ${
-      highlight ? "border-blue-500/30 bg-gradient-to-br from-[#1a1d27] to-blue-950/20" : "border-[#2a2d3a] bg-[#1a1d27] hover:border-slate-600/50"
+      highlight
+        ? "border-blue-500/30 bg-gradient-to-br from-[#1a1d27] to-blue-950/20"
+        : agent.abts_tier === "Elite"
+          ? "border-purple-500/30 bg-gradient-to-br from-[#1a1d27] to-purple-950/10"
+          : "border-[#2a2d3a] bg-[#1a1d27] hover:border-slate-600/50"
     }`}>
+      {/* Header: name + ABTS tier badge */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h4 className="text-sm font-semibold text-white leading-tight truncate">{agent.name}</h4>
           {agent.team_name && <p className="text-xs text-slate-500 mt-0.5">{agent.team_name}</p>}
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          {agent.validation_score != null && (
-            <span className={`text-xs font-bold ${scoreColor(agent.validation_score)}`}>{agent.validation_score}/100</span>
+          {/* ABTS Score — the primary trust number */}
+          {abtsScore > 0 && (
+            <span className={`text-sm font-bold tabular-nums ${abtsScoreColor(abtsScore)}`}>
+              {abtsScore.toFixed(0)}<span className="text-xs font-normal text-slate-600"> ABTS</span>
+            </span>
           )}
-          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${agent.badge_tier ? badgeStyle(agent.badge_tier) : "bg-slate-700/50 text-slate-500"}`}>
-            {agent.badge_tier || "unscored"}
+          {/* ABTS Tier Badge */}
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold border flex items-center gap-1 ${ts.bg}`}>
+            <span>{ts.icon}</span>
+            {agent.abts_tier || "New"}
           </span>
+          {/* Validation score (secondary) */}
+          {agent.validation_score != null && (
+            <span className={`text-xs ${scoreColor(agent.validation_score)} opacity-70`}>
+              Val: {agent.validation_score}/100
+            </span>
+          )}
         </div>
       </div>
-      {agent.category && (
-        <span className="self-start rounded-full bg-slate-700/50 px-2 py-0.5 text-xs text-slate-400">{agent.category}</span>
+
+      {/* Category + avg rating row */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {agent.category && (
+          <span className="rounded-full bg-slate-700/50 px-2 py-0.5 text-xs text-slate-400">{agent.category}</span>
+        )}
+        {avgRating && (
+          <span className="flex items-center gap-0.5 text-xs text-yellow-400">
+            <Star className="h-3 w-3 fill-yellow-400" /> {avgRating} ({agent.rating_count})
+          </span>
+        )}
+        {!avgRating && agent.interaction_count && agent.interaction_count > 0 ? (
+          <span className="text-xs text-slate-600">{agent.interaction_count} interactions</span>
+        ) : null}
+      </div>
+
+      {/* ABTS components tooltip (only for scored agents) */}
+      {agent.abts_components && abtsScore > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { key: "R", label: "Rep",   color: "text-pink-400"   },
+            { key: "P", label: "Perf",  color: "text-blue-400"   },
+            { key: "V", label: "Valid", color: "text-green-400"  },
+            { key: "S", label: "Stab",  color: "text-yellow-400" },
+          ].map(({ key, label, color }) => {
+            const val = agent.abts_components?.[key as keyof typeof agent.abts_components] as number | undefined;
+            if (val == null) return null;
+            return (
+              <div key={key} className="flex items-center gap-0.5 text-xs">
+                <span className="text-slate-600">{label}:</span>
+                <span className={`font-medium ${color}`}>{val.toFixed(0)}</span>
+              </div>
+            );
+          })}
+        </div>
       )}
+
       <p className="text-xs text-slate-400 line-clamp-2 flex-1">{agent.description}</p>
+
       {agent.capabilities && agent.capabilities.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {agent.capabilities.slice(0, 3).map(cap => (
@@ -1138,7 +1434,22 @@ function AgentCard({ agent, actingId, actionResult, onBuy, onPropose, onMatch, h
           {agent.capabilities.length > 3 && <span className="text-xs text-slate-600">+{agent.capabilities.length - 3}</span>}
         </div>
       )}
+
       <div className="text-xs text-emerald-400 font-medium">{agent.pricing}</div>
+
+      {/* Star rating row */}
+      {onRate && (
+        <div className="flex items-center gap-1.5 pt-1">
+          <span className="text-xs text-slate-600">Rate:</span>
+          {[1,2,3,4,5].map(s => (
+            <button key={s} onClick={() => onRate(agent, s)} title={`Rate ${s} stars`}
+              className="text-slate-600 hover:text-yellow-400 transition-colors">
+              <Star className="h-3.5 w-3.5" />
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-1.5 pt-2 border-t border-[#2a2d3a]">
         <button onClick={() => onMatch(agent)} disabled={isActing} title="Find matches"
           className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-[#2a2d3a] px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-50 transition-colors">
@@ -1150,7 +1461,7 @@ function AgentCard({ agent, actingId, actionResult, onBuy, onPropose, onMatch, h
           {actingId === agent.id && actionResult?.type !== "buy" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
           Propose
         </button>
-        <button onClick={() => onBuy(agent)} disabled={isActing} title="Buy / call this agent"
+        <button onClick={() => onBuy(agent)} disabled={isActing} title="Buy / call this agent via Nevermined"
           className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-blue-600 px-2 py-1.5 text-xs text-white hover:bg-blue-500 disabled:opacity-50 transition-colors">
           {actingId === agent.id && actionResult?.type === "buy" ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShoppingCart className="h-3 w-3" />}
           Buy
@@ -1185,7 +1496,7 @@ function MatchModal({ agent, data, onClose, onPropose, actingId }: {
           {data.sponsored_context && data.sponsored_context.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs text-slate-500 uppercase tracking-wide flex items-center gap-1">
-                <Megaphone className="h-3 w-3" /> Sponsored
+                <Zap className="h-3 w-3" /> Sponsored
               </p>
               {data.sponsored_context.map((ad, i) => (
                 <a key={i} href={ad.url || "#"} target="_blank" rel="noopener noreferrer"

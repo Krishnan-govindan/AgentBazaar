@@ -42,11 +42,12 @@ Run locally:
 import os
 import json
 import uuid
+import math
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timezone
 
 import httpx
 
@@ -79,7 +80,8 @@ NVM_PLAN_ID_RESEARCH       = os.environ.get("NVM_PLAN_ID_RESEARCH", "")
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 MCP_URL     = "https://mcp.apify.com?tools=apify/rag-web-browser"
 
-ABILITY_BROKER_URL = "https://us14.abilityai.dev/api/paid/agentbroker/chat"
+ABILITY_BROKER_URL  = "https://us14.abilityai.dev/api/paid/agentbroker/chat"
+NVM_DISCOVER_URL    = "https://nevermined.ai/hackathon/register/api/discover"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
@@ -108,8 +110,8 @@ def _require(name: str, client):
 
 # ── Background auto-buy loop ───────────────────────────────────────────────────
 async def _auto_buy_loop():
-    """Every 10 min autonomously buy research from the Ability.ai broker.
-    This generates cross-team transaction evidence for the judges."""
+    """Every 10 min autonomously buy from real hackathon agents (or fallback broker).
+    Generates cross-team transaction evidence for the judges."""
     await asyncio.sleep(90)  # let server warm up first
     topics = [
         "AI agent marketplace economic model 2026",
@@ -123,6 +125,27 @@ async def _auto_buy_loop():
         if NVM_API_KEY and supa:
             topic = topics[idx % len(topics)]
             idx += 1
+
+            # Try to buy from a real hackathon agent if available
+            target_did = "ability-broker"
+            try:
+                real_agents = (
+                    supa.table("agents")
+                    .select("plan_did,name,team_name")
+                    .eq("source", "nevermined-hackathon")
+                    .eq("status", "active")
+                    .not_.is_("plan_did", "null")
+                    .neq("plan_did", "")
+                    .limit(20)
+                    .execute()
+                )
+                if real_agents.data:
+                    pick = real_agents.data[idx % len(real_agents.data)]
+                    target_did = pick["plan_did"]
+                    logger.info(f"[auto-buy] Buying from real agent: {pick.get('name','?')} (DID={target_did[:30]}...)")
+            except Exception:
+                pass
+
             logger.info(f"[auto-buy] Buying research on: {topic}")
             try:
                 async with httpx.AsyncClient(timeout=30) as client:
@@ -134,7 +157,7 @@ async def _auto_buy_loop():
                         },
                         json={
                             "messages": [{"role": "user", "content": f"research {topic}"}],
-                            "model": "agent-bazaar",
+                            "model": target_did,
                             "stream": False,
                         },
                     )
@@ -145,12 +168,12 @@ async def _auto_buy_loop():
                 )
                 supa.table("agent_purchases").insert({
                     "from_agent_id": "agentbazaar-auto-buyer",
-                    "to_agent_id":   "ability-broker",
+                    "to_agent_id":   target_did,
                     "message_sent":  f"research {topic}",
                     "response_status": resp.status_code,
                     "response_body": json.dumps(result)[:2000],
                 }).execute()
-                logger.info(f"[auto-buy] Transaction logged. Status: {resp.status_code}")
+                logger.info(f"[auto-buy] Transaction logged. Status: {resp.status_code}, target={target_did[:30]}")
             except Exception as e:
                 logger.warning(f"[auto-buy] Failed: {e}")
         await asyncio.sleep(600)  # 10 minutes
@@ -301,13 +324,67 @@ async def _execute_accept(proposal_id: str, bid_id: str, prop: dict, bid: dict):
         logger.warning(f"[execute-accept] Failed: {e}")
 
 
+async def _startup_tasks():
+    """Run once on startup: sync hackathon agents then recalculate ABTS."""
+    await asyncio.sleep(10)  # wait for server to be healthy
+    logger.info("[startup] Syncing hackathon agents from Nevermined portal...")
+    n = await _discover_and_sync_agents()
+    logger.info(f"[startup] Agent sync done ({n} upserted). Recalculating ABTS...")
+    await _recalc_abts_all()
+    logger.info("[startup] ABTS recalc complete.")
+
+    # Auto-validate any unscored hackathon agents (limit=10 to avoid rate limits)
+    if supa and claude:
+        try:
+            data = (
+                supa.table("agents")
+                .select("id,name,description,capabilities,website_url,endpoint,team_name")
+                .is_("validation_score", "null")
+                .eq("status", "active")
+                .limit(10)
+                .execute()
+            )
+            if data.data:
+                logger.info(f"[startup] Batch-validating {len(data.data)} unscored agents...")
+                await _batch_validate(data.data)
+                await _recalc_abts_all()  # recalc again after scoring
+        except Exception as e:
+            logger.warning(f"[startup] Startup batch-validate error: {e}")
+
+
+async def _periodic_abts_loop():
+    """Recalculate ABTS every 30 minutes and sync new agents from portal every 60 min."""
+    abts_interval = 1800   # 30 minutes
+    sync_interval = 3600   # 60 minutes
+    last_sync = 0.0
+
+    await asyncio.sleep(300)  # 5 min warmup
+    while True:
+        import time
+        now = time.time()
+
+        # Always recalculate ABTS
+        logger.info("[periodic] Recalculating ABTS scores...")
+        await _recalc_abts_all()
+
+        # Sync agents from Nevermined portal periodically
+        if now - last_sync > sync_interval:
+            logger.info("[periodic] Syncing hackathon agents from Nevermined portal...")
+            await _discover_and_sync_agents()
+            last_sync = time.time()
+
+        await asyncio.sleep(abts_interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     t1 = asyncio.create_task(_auto_buy_loop())
     t2 = asyncio.create_task(_auto_proposal_loop())
-    logger.info("AgentBazaar started — auto-buy + auto-proposal loops active")
+    t3 = asyncio.create_task(_startup_tasks())
+    t4 = asyncio.create_task(_periodic_abts_loop())
+    logger.info("AgentBazaar v3.1.0 started — auto-buy, auto-proposal, ABTS + agent-sync loops active")
     yield
-    for t in (t1, t2):
+    for t in (t1, t2, t3, t4):
         t.cancel()
         try:
             await t
@@ -515,6 +592,235 @@ async def _log_call(
             }).execute()
         except Exception:
             pass
+
+
+# ── ABTS: Agent Bazaar Trust Score ─────────────────────────────────────────────
+def _calc_abts(
+    interaction_count: int = 0,
+    rating_sum: float = 0.0,
+    rating_count: int = 0,
+    uptime_pct: float = 100.0,
+    completion_rate: float = 100.0,
+    error_rate: float = 0.0,
+    validation_score: int | None = None,
+    created_days_ago: int = 0,
+) -> dict:
+    """
+    ABTS = C_conf × [0.35·R + 0.30·P + 0.15·V + 0.20·S]
+
+    R  = Bayesian reputation score (0-100), uses star ratings with prior=70
+    P  = Performance score (0-100), uptime + completion + error rate
+    V  = Verification score (0-100), = validation pipeline score
+    S  = Stability score (0-100), agent age + consistency
+    C_conf = 1 - e^(-n/20), cold-start confidence multiplier
+
+    Tiers: New (<35), Verified (35-59), Trusted (60-79), Elite (80-100)
+    """
+    n = max(interaction_count, 0)
+
+    # Confidence multiplier — approaches 1 as interactions accumulate
+    c_conf = max(0.1, 1.0 - math.exp(-n / 20.0))
+
+    # R: Bayesian reputation with global prior of 70/100
+    prior, k = 70.0, 5
+    if rating_count > 0:
+        avg_rating_100 = (rating_sum / rating_count) * 20.0  # 1-5 stars → 0-100
+        R = (k * prior + avg_rating_100 * rating_count) / (k + rating_count)
+    else:
+        R = prior  # default prior for new agents
+
+    # P: Performance composite
+    up   = max(0.0, min(100.0, uptime_pct))
+    comp = max(0.0, min(100.0, completion_rate))
+    err  = max(0.0, min(100.0, error_rate))
+    P = up * 0.40 + comp * 0.40 + (100.0 - err) * 0.20
+
+    # V: Verification score (unvalidated defaults to 50)
+    V = float(validation_score) if validation_score is not None else 50.0
+
+    # S: Stability — penalises brand-new agents, rewards longevity
+    age_score   = min(100.0, created_days_ago * 2.0)   # maxes at 50 days
+    consistency = max(0.0, 100.0 - err * 2.0)           # error-rate penalty
+    S = age_score * 0.60 + consistency * 0.40
+
+    # Composite ABTS
+    abts = round(c_conf * (0.35 * R + 0.30 * P + 0.15 * V + 0.20 * S), 1)
+
+    # Tier assignment
+    if abts >= 80:
+        tier = "Elite"
+    elif abts >= 60:
+        tier = "Trusted"
+    elif abts >= 35:
+        tier = "Verified"
+    else:
+        tier = "New"
+
+    return {
+        "abts_score": abts,
+        "abts_tier": tier,
+        "abts_components": {
+            "R": round(R, 1),
+            "P": round(P, 1),
+            "V": round(V, 1),
+            "S": round(S, 1),
+            "c_conf": round(c_conf, 3),
+        },
+    }
+
+
+async def _recalc_abts_all():
+    """Recalculate ABTS for every agent in the DB. Safe to run concurrently."""
+    if not supa:
+        return
+    logger.info("[abts] Starting full ABTS recalculation...")
+    try:
+        data = supa.table("agents").select("*").eq("status", "active").execute()
+        now  = datetime.now(timezone.utc)
+        updated = 0
+        for agent in (data.data or []):
+            try:
+                created_at = agent.get("created_at", "")
+                days_ago   = 0
+                if created_at:
+                    try:
+                        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        days_ago = max(0, (now - dt).days)
+                    except Exception:
+                        pass
+
+                result = _calc_abts(
+                    interaction_count=int(agent.get("interaction_count") or 0),
+                    rating_sum=float(agent.get("rating_sum") or 0.0),
+                    rating_count=int(agent.get("rating_count") or 0),
+                    uptime_pct=float(agent.get("uptime_pct") or 100.0),
+                    completion_rate=float(agent.get("completion_rate") or 100.0),
+                    error_rate=float(agent.get("error_rate") or 0.0),
+                    validation_score=agent.get("validation_score"),
+                    created_days_ago=days_ago,
+                )
+                supa.table("agents").update({
+                    "abts_score":      result["abts_score"],
+                    "abts_tier":       result["abts_tier"],
+                    "abts_components": result["abts_components"],
+                }).eq("id", agent["id"]).execute()
+                updated += 1
+                await asyncio.sleep(0.05)  # avoid hitting Supabase rate limits
+            except Exception as e:
+                logger.warning(f"[abts] recalc failed for {agent.get('name','?')}: {e}")
+        logger.info(f"[abts] Recalculated {updated} agents")
+    except Exception as e:
+        logger.warning(f"[abts] Full recalc error: {e}")
+
+
+async def _discover_and_sync_agents():
+    """
+    Pull hackathon agents from the Nevermined portal discovery API and upsert
+    them into our agents table. Called once at startup + via /marketplace/sync-agents.
+    """
+    if not supa:
+        return 0
+
+    synced   = 0
+    updated  = 0
+    all_raw: list[dict] = []
+
+    categories = [None, "analytics", "research", "ai-ml", "data", "infrastructure",
+                  "social", "defi", "gaming", "nft", "identity", "other"]
+
+    for category in categories:
+        try:
+            params: dict = {"side": "sell"}
+            if category:
+                params["category"] = category
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    NVM_DISCOVER_URL, params=params,
+                    headers={"Accept": "application/json"},
+                )
+            if resp.status_code != 200:
+                continue
+            body = resp.json()
+            agents_raw = (
+                body if isinstance(body, list)
+                else body.get("agents", body.get("results", body.get("data", [])))
+            )
+            all_raw.extend(agents_raw)
+        except Exception as e:
+            logger.debug(f"[discover] category={category}: {e}")
+            continue
+
+    # De-duplicate by DID/name
+    seen_dids: set = set()
+    unique: list[dict] = []
+    for ag in all_raw:
+        did  = ag.get("did") or ag.get("id") or ""
+        name = ag.get("name") or ag.get("title") or ""
+        key  = did or name
+        if key and key not in seen_dids:
+            seen_dids.add(key)
+            unique.append(ag)
+
+    logger.info(f"[discover] Found {len(unique)} unique hackathon agents from Nevermined portal")
+
+    for ag in unique:
+        try:
+            name     = (ag.get("name") or ag.get("title") or ag.get("agent_name") or "").strip()
+            did      = ag.get("did") or ag.get("plan_did") or ag.get("id") or ""
+            team     = ag.get("team") or ag.get("team_name") or ag.get("owner") or ""
+            desc     = ag.get("description") or ag.get("summary") or f"Hackathon agent by {team}"
+            cat      = ag.get("category") or "AI/ML"
+            endpoint = ag.get("endpoint") or ag.get("url") or ag.get("service_endpoint") or ""
+            pricing  = str(ag.get("price") or ag.get("pricing") or "contact")
+            website  = ag.get("website") or ag.get("website_url") or endpoint or ""
+            caps     = ag.get("capabilities") or ag.get("tags") or []
+            if isinstance(caps, str):
+                caps = [c.strip() for c in caps.split(",")]
+
+            if not name:
+                continue
+
+            row = {
+                "name":        name[:200],
+                "description": desc[:500],
+                "capabilities": caps[:10],
+                "pricing":     pricing[:100],
+                "endpoint":    endpoint[:500],
+                "plan_did":    did[:500],
+                "status":      "active",
+                "source":      "nevermined-hackathon",
+                "team_name":   str(team)[:200],
+                "category":    str(cat)[:100],
+                "website_url": website[:500],
+                "metadata":    {k: str(v)[:200] for k, v in ag.items()
+                                if k not in ("name","description","capabilities")},
+            }
+
+            # Upsert: check if agent with this name+source already exists
+            existing = (
+                supa.table("agents")
+                .select("id")
+                .eq("name", name)
+                .eq("source", "nevermined-hackathon")
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                supa.table("agents").update(row).eq("id", existing.data[0]["id"]).execute()
+                updated += 1
+            else:
+                supa.table("agents").insert(row).execute()
+                synced += 1
+        except Exception as e:
+            logger.warning(f"[discover] upsert failed for {ag.get('name','?')}: {e}")
+
+    logger.info(f"[discover] Sync done: {synced} new, {updated} updated")
+
+    # Trigger ABTS recalc after sync so new agents get initial scores
+    if synced + updated > 0:
+        asyncio.create_task(_recalc_abts_all())
+
+    return synced + updated
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -1122,6 +1428,155 @@ async def _batch_validate(agents_list: list):
             logger.warning(f"[batch-validate] Failed for {agent.get('name','?')}: {e}")
 
 
+@app.post("/marketplace/sync-agents")
+async def sync_agents():
+    """
+    Pull hackathon agents from the Nevermined portal discovery API,
+    upsert into our agents table, then recalculate ABTS for all agents.
+    Returns count of synced agents.
+    """
+    if not supa:
+        raise HTTPException(503, "Supabase not configured")
+    try:
+        n = await _discover_and_sync_agents()
+        # Count total agents in DB for feedback
+        total = supa.table("agents").select("id", count="exact").eq("status", "active").execute()
+        return {
+            "synced": n,
+            "total_agents": total.count or 0,
+            "message": f"Synced {n} agents from Nevermined hackathon portal. ABTS recalculating in background.",
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Sync failed: {e}")
+
+
+@app.post("/marketplace/rate")
+async def rate_agent(body: dict):
+    """
+    Rate an agent (1-5 stars). Updates rating_sum + rating_count, then
+    recalculates ABTS and increments interaction_count.
+    Also logs a performance event for the P pillar.
+    """
+    if not supa:
+        raise HTTPException(503, "Supabase not configured")
+
+    agent_id = body.get("agent_id", "")
+    rating   = int(body.get("rating", 3))
+    comment  = body.get("comment", "")
+    rater_id = body.get("rater_id", "anonymous")
+
+    if not agent_id:
+        raise HTTPException(400, "agent_id required")
+    if not (1 <= rating <= 5):
+        raise HTTPException(400, "rating must be 1-5")
+
+    # Fetch current agent
+    try:
+        res = supa.table("agents").select("*").eq("id", agent_id).limit(1).execute()
+        if not res.data:
+            raise HTTPException(404, "Agent not found")
+        agent = res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch agent: {e}")
+
+    # Atomic update: increment rating + interaction count
+    new_rating_sum   = float(agent.get("rating_sum") or 0) + rating
+    new_rating_count = int(agent.get("rating_count") or 0) + 1
+    new_interactions = int(agent.get("interaction_count") or 0) + 1
+
+    supa.table("agents").update({
+        "rating_sum":       new_rating_sum,
+        "rating_count":     new_rating_count,
+        "interaction_count": new_interactions,
+    }).eq("id", agent_id).execute()
+
+    # Log to ratings table
+    try:
+        supa.table("agent_ratings").insert({
+            "agent_id":  agent_id,
+            "rater_id":  rater_id,
+            "rating":    rating,
+            "comment":   comment,
+        }).execute()
+    except Exception:
+        pass  # table may not exist yet — fail silently
+
+    # Log perf event (successful interaction)
+    try:
+        supa.table("agent_perf_events").insert({
+            "agent_id":   agent_id,
+            "event_type": "call",
+            "latency_ms": 0,
+        }).execute()
+    except Exception:
+        pass
+
+    # Recalculate ABTS for this agent
+    created_at = agent.get("created_at", "")
+    days_ago   = 0
+    if created_at:
+        try:
+            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            days_ago = max(0, (datetime.now(timezone.utc) - dt).days)
+        except Exception:
+            pass
+
+    abts = _calc_abts(
+        interaction_count=new_interactions,
+        rating_sum=new_rating_sum,
+        rating_count=new_rating_count,
+        uptime_pct=float(agent.get("uptime_pct") or 100),
+        completion_rate=float(agent.get("completion_rate") or 100),
+        error_rate=float(agent.get("error_rate") or 0),
+        validation_score=agent.get("validation_score"),
+        created_days_ago=days_ago,
+    )
+    supa.table("agents").update({
+        "abts_score":      abts["abts_score"],
+        "abts_tier":       abts["abts_tier"],
+        "abts_components": abts["abts_components"],
+    }).eq("id", agent_id).execute()
+
+    avg_rating = round(new_rating_sum / new_rating_count, 2)
+    return {
+        "agent_id":      agent_id,
+        "rating":        rating,
+        "avg_rating":    avg_rating,
+        "total_ratings": new_rating_count,
+        "abts_score":    abts["abts_score"],
+        "abts_tier":     abts["abts_tier"],
+    }
+
+
+@app.post("/marketplace/abts-recalc")
+async def abts_recalc():
+    """Trigger a full ABTS recalculation for all agents (runs in background)."""
+    asyncio.create_task(_recalc_abts_all())
+    return {"started": True, "message": "ABTS recalculation started in background"}
+
+
+@app.get("/marketplace/abts-leaderboard")
+async def abts_leaderboard(limit: int = 20, tier: str | None = None):
+    """Return agents sorted by ABTS score (the trust score, not just validation)."""
+    if not supa:
+        return []
+    try:
+        q = supa.table("agents").select(
+            "id,name,team_name,category,description,pricing,endpoint,plan_did,"
+            "validation_score,badge_tier,abts_score,abts_tier,abts_components,"
+            "interaction_count,rating_sum,rating_count,source"
+        ).eq("status", "active")
+        if tier:
+            q = q.eq("abts_tier", tier)
+        data = q.order("abts_score", desc=True, nullsfirst=False).limit(limit).execute()
+        return data.data
+    except Exception as e:
+        logger.warning(f"abts_leaderboard error: {e}")
+        return []
+
+
 @app.post("/marketplace/matches")
 async def find_agent_matches(body: dict):
     """Find complementary agents + ZeroClick ads for a given agent."""
@@ -1651,10 +2106,20 @@ async def proposals_stats():
 @app.get("/healthz")
 @app.get("/health")
 async def health():
+    agent_count = 0
+    if supa:
+        try:
+            r = supa.table("agents").select("id", count="exact").eq("status", "active").execute()
+            agent_count = r.count or 0
+        except Exception:
+            pass
+
     return {
         "status":    "ok",
-        "version":   "3.0.0",
+        "version":   "3.1.0",
         "payments":  "active" if (payments and NVM_PLAN_ID_VALIDATOR) else "disabled",
         "zeroclick": "active" if ZEROCLICK_API_KEY else "disabled",
         "supabase":  "active" if supa else "disabled",
+        "abts":      "active",
+        "agents":    agent_count,
     }
