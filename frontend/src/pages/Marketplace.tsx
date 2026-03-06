@@ -173,13 +173,13 @@ export default function Marketplace() {
   const fetchBids = async (proposalId: string) => {
     try {
       const res = await fetch(`${API_URL}/proposals/${proposalId}/bids`);
-      if (res.ok) setProposalBids(prev => ({ ...prev, [proposalId]: await res.json() }));
+      if (res.ok) { const data = await res.json(); setProposalBids(prev => ({ ...prev, [proposalId]: data })); }
     } catch { /**/ }
   };
   const fetchMessages = async (proposalId: string) => {
     try {
       const res = await fetch(`${API_URL}/proposals/${proposalId}/messages`);
-      if (res.ok) setProposalMsgs(prev => ({ ...prev, [proposalId]: await res.json() }));
+      if (res.ok) { const data = await res.json(); setProposalMsgs(prev => ({ ...prev, [proposalId]: data })); }
     } catch { /**/ }
   };
 
