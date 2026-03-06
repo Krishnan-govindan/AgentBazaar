@@ -72,12 +72,19 @@ logger = logging.getLogger("agentbazaar")
 NVM_API_KEY      = os.environ.get("NVM_API_KEY", "")
 NVM_ENVIRONMENT  = os.environ.get("NVM_ENVIRONMENT", "sandbox")
 
-# Single combined plan covers /validate AND /research under one agent
-NVM_PLAN_ID = (
-    os.environ.get("NVM_PLAN_ID")
-    or os.environ.get("NVM_PLAN_ID_VALIDATOR")   # backward compat
+# Per-route plan IDs — each registered Nevermined agent has its own plan
+NVM_PLAN_ID_VALIDATOR = (
+    os.environ.get("NVM_PLAN_ID_VALIDATOR")
+    or os.environ.get("NVM_PLAN_ID")
     or ""
 )
+NVM_PLAN_ID_RESEARCH = (
+    os.environ.get("NVM_PLAN_ID_RESEARCH")
+    or os.environ.get("NVM_PLAN_ID")
+    or ""
+)
+# Legacy alias — used by auto-buy loop and broker helpers
+NVM_PLAN_ID = NVM_PLAN_ID_VALIDATOR or NVM_PLAN_ID_RESEARCH
 
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 MCP_URL     = "https://mcp.apify.com?tools=apify/rag-web-browser"
@@ -146,33 +153,64 @@ async def _auto_buy_loop():
 
             # Try to buy from a real hackathon agent if available
             target_did = "ability-broker"
+            target_name = "broker"
             try:
-                real_agents = (
-                    supa.table("agents")
-                    .select("plan_did,name,team_name")
-                    .eq("source", "nevermined-hackathon")
-                    .eq("status", "active")
-                    .not_.is_("plan_did", "null")
-                    .neq("plan_did", "")
-                    .limit(20)
-                    .execute()
-                )
-                if real_agents.data:
-                    pick = real_agents.data[idx % len(real_agents.data)]
-                    target_did = pick["plan_did"]
-                    logger.info(f"[auto-buy] Buying from real agent: {pick.get('name','?')} (DID={target_did[:30]}...)")
-            except Exception:
-                pass
+                # Prefer live discovery API for fresh agent list
+                async with httpx.AsyncClient(timeout=10) as _dc:
+                    _dr = await _dc.get(
+                        NVM_DISCOVER_URL,
+                        headers={"x-nvm-api-key": NVM_API_KEY} if NVM_API_KEY else {},
+                    )
+                if _dr.status_code == 200:
+                    _sellers = _dr.json().get("sellers", [])
+                    # filter out ourselves
+                    _sellers = [s for s in _sellers if s.get("teamName") != "Agent Bazaar"]
+                    if _sellers:
+                        pick = _sellers[idx % len(_sellers)]
+                        _aid = pick.get("nvmAgentId", "0")
+                        target_did = "did:nv:" + hex(int(_aid))[2:].zfill(64)
+                        target_name = pick.get("name", "?")
+                        logger.info(f"[auto-buy] Buying from discovered agent: {target_name} (DID={target_did[:30]}...)")
+                else:
+                    # Fallback: DB agents
+                    real_agents = (
+                        supa.table("agents")
+                        .select("plan_did,name,team_name")
+                        .eq("source", "nevermined-hackathon")
+                        .eq("status", "active")
+                        .not_.is_("plan_did", "null")
+                        .neq("plan_did", "")
+                        .limit(20)
+                        .execute()
+                    )
+                    if real_agents.data:
+                        pick = real_agents.data[idx % len(real_agents.data)]
+                        target_did = pick["plan_did"]
+                        target_name = pick.get("name", "?")
+                        logger.info(f"[auto-buy] Buying from DB agent: {target_name}")
+            except Exception as _ex:
+                logger.debug(f"[auto-buy] Agent discovery failed, using broker fallback: {_ex}")
 
             logger.info(f"[auto-buy] Buying research on: {topic}")
             try:
+                # Build broker headers — attach x402 payment-signature when available
+                _broker_hdrs: dict = {
+                    "Authorization": f"Bearer {NVM_API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                if payments:
+                    try:
+                        _tok = payments.x402.get_x402_access_token(plan_id=NVM_PLAN_ID)
+                        _tok_val = _tok.get("accessToken", "")
+                        if _tok_val:
+                            _broker_hdrs["payment-signature"] = _tok_val
+                    except Exception:
+                        pass
+
                 async with httpx.AsyncClient(timeout=30) as client:
                     resp = await client.post(
                         ABILITY_BROKER_URL,
-                        headers={
-                            "Authorization": f"Bearer {NVM_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
+                        headers=_broker_hdrs,
                         json={
                             "message": f"research {topic}",   # Ability.ai broker uses singular "message"
                             "model": target_did,
@@ -186,12 +224,12 @@ async def _auto_buy_loop():
                 )
                 supa.table("agent_purchases").insert({
                     "from_agent_id": "agentbazaar-auto-buyer",
-                    "to_agent_id":   target_did,
+                    "to_agent_id":   f"{target_name}|{target_did}",
                     "message_sent":  f"research {topic}",
                     "response_status": resp.status_code,
                     "response_body": json.dumps(result)[:2000],
                 }).execute()
-                logger.info(f"[auto-buy] Transaction logged. Status: {resp.status_code}, target={target_did[:30]}")
+                logger.info(f"[auto-buy] Transaction logged. Status: {resp.status_code}, target={target_name}")
             except Exception as e:
                 logger.warning(f"[auto-buy] Failed: {e}")
 
@@ -503,14 +541,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# x402 payment middleware — single combined plan covers both /validate and /research
-if payments and NVM_PLAN_ID:
-    _routes = {
-        "POST /validate": {"plan_id": NVM_PLAN_ID, "credits": 1},
-        "POST /research":  {"plan_id": NVM_PLAN_ID, "credits": 1},
-    }
+# x402 payment middleware — each route uses its own registered Nevermined plan
+if payments and (NVM_PLAN_ID_VALIDATOR or NVM_PLAN_ID_RESEARCH):
+    _routes: dict = {}
+    if NVM_PLAN_ID_VALIDATOR:
+        _routes["POST /validate"] = {"plan_id": NVM_PLAN_ID_VALIDATOR, "credits": 1}
+    if NVM_PLAN_ID_RESEARCH:
+        _routes["POST /research"] = {"plan_id": NVM_PLAN_ID_RESEARCH, "credits": 1}
     app.add_middleware(PaymentMiddleware, payments=payments, routes=_routes)
-    logger.info(f"PaymentMiddleware active — single plan {NVM_PLAN_ID[:16]}… on: {list(_routes.keys())}")
+    logger.info(
+        f"PaymentMiddleware active — "
+        f"validator={NVM_PLAN_ID_VALIDATOR[:16] if NVM_PLAN_ID_VALIDATOR else 'none'}… "
+        f"research={NVM_PLAN_ID_RESEARCH[:16] if NVM_PLAN_ID_RESEARCH else 'none'}… "
+        f"routes={list(_routes.keys())}"
+    )
 
 
 # ── Request / Response models ──────────────────────────────────────────────────
