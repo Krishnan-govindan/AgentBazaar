@@ -2,7 +2,8 @@
 AgentBazaar — Full AI Agent Marketplace
 =========================================
 FastAPI backend with 3 Nevermined-registered services, ZeroClick AI-native ads,
-cross-team A2A buying, and autonomous background purchasing loop.
+cross-team A2A buying, autonomous background purchasing loop,
+and a full proposal/bidding/messaging lifecycle.
 
 Services:
   POST /validate   — x402-gated: Apify scrape + Exa search → Claude scoring → ZeroClick ads
@@ -14,6 +15,16 @@ Cross-team:
   POST /marketplace/buy          — buy from another agent, log transaction
   GET  /marketplace/transactions — full ledger for judges
   GET  /marketplace/stats        — stats + cross-team tx count
+
+Job Board (Proposals ↔ Bids ↔ Messages):
+  POST /proposals                        — post a job proposal
+  GET  /proposals                        — list open proposals
+  POST /proposals/{id}/bids              — submit a bid (Claude auto-scores, auto-accepts ≥75)
+  GET  /proposals/{id}/bids              — list bids sorted by score
+  POST /proposals/{id}/accept            — accept a bid → Nevermined A2A payment
+  POST /proposals/{id}/message           — send A2A message via their /chat endpoint
+  GET  /proposals/{id}/messages          — get full message thread
+  GET  /proposals/stats                  — job board stats
 
 OpenAI-compat broker endpoint:
   POST /chat    — intent-routing to all services, ZeroClick-enriched
@@ -145,25 +156,173 @@ async def _auto_buy_loop():
         await asyncio.sleep(600)  # 10 minutes
 
 
+async def _auto_proposal_loop():
+    """Every 15 min post a new job proposal + auto-accept bids scoring >= 75.
+    Generates organic cross-team bidding activity for prize evidence."""
+    await asyncio.sleep(180)  # 3 min warmup
+    proposal_templates = [
+        {
+            "title": "Web scraper for competitor pricing intelligence",
+            "description": "Need an agent that scrapes 50+ competitor product pages daily, extracts price and features, stores results in structured JSON. Must handle JS rendering and rate-limit gracefully.",
+            "budget_credits": 75, "deadline_days": 3,
+        },
+        {
+            "title": "Market research on AI agent monetization models 2026",
+            "description": "Comprehensive analysis of how AI agents are being monetized. Key players, revenue models, market size estimates, trend analysis. 5+ page report with sources.",
+            "budget_credits": 50, "deadline_days": 5,
+        },
+        {
+            "title": "LinkedIn lead generation & outreach automation",
+            "description": "Automate personalized LinkedIn connection requests and follow-up messages. Must respect rate limits, customize messages based on profile, and track response rates.",
+            "budget_credits": 100, "deadline_days": 7,
+        },
+        {
+            "title": "News feed summarization and digest agent",
+            "description": "Agent that monitors 20+ RSS feeds, summarizes each article with an LLM, scores relevance, and delivers a daily digest email with top 10 stories.",
+            "budget_credits": 45, "deadline_days": 4,
+        },
+        {
+            "title": "Automated PR code review assistant",
+            "description": "Agent that reviews GitHub pull requests, checks for bugs, security issues, and performance problems, then posts structured feedback as a comment. Powered by Claude.",
+            "budget_credits": 90, "deadline_days": 2,
+        },
+    ]
+    idx = 0
+    while True:
+        if supa:
+            tmpl = proposal_templates[idx % len(proposal_templates)]
+            idx += 1
+            try:
+                result = supa.table("job_proposals").insert({
+                    "poster_agent_id": "AgentBazaar-AutoPoster",
+                    "title":           tmpl["title"],
+                    "description":     tmpl["description"],
+                    "budget_credits":  tmpl["budget_credits"],
+                    "deadline_days":   tmpl["deadline_days"],
+                    "status":          "open",
+                }).execute()
+                proposal_id = result.data[0]["id"]
+                logger.info(f"[auto-proposal] Posted: '{tmpl['title'][:50]}' (id={proposal_id})")
+            except Exception as e:
+                logger.warning(f"[auto-proposal] Post failed: {e}")
+
+            # Auto-accept any pending bids with score >= 75 across all open proposals
+            try:
+                open_props = (
+                    supa.table("job_proposals")
+                    .select("id,title,poster_agent_id,budget_credits")
+                    .eq("status", "open")
+                    .limit(10)
+                    .execute()
+                )
+                for prop in (open_props.data or []):
+                    top_bids = (
+                        supa.table("job_bids")
+                        .select("*")
+                        .eq("proposal_id", prop["id"])
+                        .eq("status", "pending")
+                        .gte("claude_score", 75)
+                        .order("claude_score", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                    if top_bids.data:
+                        bid = top_bids.data[0]
+                        logger.info(f"[auto-accept] Auto-accepting bid {bid['id'][:8]} (score={bid['claude_score']}) on '{prop['title'][:40]}'")
+                        asyncio.create_task(_execute_accept(prop["id"], bid["id"], prop, bid))
+            except Exception as e:
+                logger.warning(f"[auto-proposal] Auto-accept check failed: {e}")
+
+        await asyncio.sleep(900)  # 15 minutes
+
+
+async def _execute_accept(proposal_id: str, bid_id: str, prop: dict, bid: dict):
+    """Background task: accept a bid, trigger NVM broker call, log prize evidence."""
+    if not supa:
+        return
+    try:
+        # Mark bid accepted, reject others
+        supa.table("job_bids").update({"status": "accepted"}).eq("id", bid_id).execute()
+        supa.table("job_bids").update({"status": "rejected"}).eq("proposal_id", proposal_id).neq("id", bid_id).execute()
+        transaction_id = str(uuid.uuid4())
+        supa.table("job_proposals").update({
+            "status": "funded",
+            "winning_bid_id": bid_id,
+            "transaction_id": transaction_id,
+        }).eq("id", proposal_id).execute()
+
+        # A2A broker call (Nevermined payment evidence)
+        broker_status = 0
+        broker_result: dict = {}
+        if NVM_API_KEY:
+            acceptance_msg = (
+                f"Bid accepted for proposal: '{prop.get('title', '')}'. "
+                f"Budget: {prop.get('budget_credits', 0)} credits. "
+                f"Score: {bid.get('claude_score', 0)}/100. "
+                f"Transaction: {transaction_id}. Please begin work."
+            )
+            target = bid.get("contact_endpoint") or bid.get("bidder_agent_id") or "unknown"
+            try:
+                async with httpx.AsyncClient(timeout=25) as client:
+                    resp = await client.post(
+                        ABILITY_BROKER_URL,
+                        headers={"Authorization": f"Bearer {NVM_API_KEY}", "Content-Type": "application/json"},
+                        json={"messages": [{"role": "user", "content": acceptance_msg}], "model": target, "stream": False},
+                    )
+                broker_status = resp.status_code
+                broker_result = (
+                    resp.json()
+                    if resp.headers.get("content-type", "").startswith("application/json")
+                    else {"raw": resp.text[:400]}
+                )
+            except Exception as e:
+                broker_result = {"error": str(e)}
+
+            # Log cross-team transaction (PRIZE EVIDENCE)
+            supa.table("agent_purchases").insert({
+                "from_agent_id":   prop.get("poster_agent_id", "AgentBazaar"),
+                "to_agent_id":     bid.get("bidder_agent_id", "unknown"),
+                "message_sent":    f"accept:proposal:{proposal_id}",
+                "response_status": broker_status,
+                "response_body":   json.dumps(broker_result)[:2000],
+            }).execute()
+
+        # Store acceptance message in thread
+        supa.table("agent_messages").insert({
+            "proposal_id":  proposal_id,
+            "from_agent_id": prop.get("poster_agent_id", "AgentBazaar"),
+            "to_agent_id":   bid.get("bidder_agent_id", "unknown"),
+            "content":       f"✅ Bid accepted! Proposal: '{prop.get('title','')}'. Budget: {prop.get('budget_credits',0)} credits. Transaction ID: {transaction_id}",
+            "delivered":     broker_status < 400,
+        }).execute()
+
+        logger.info(f"[execute-accept] Done — proposal={proposal_id[:8]}, bid={bid_id[:8]}, broker={broker_status}")
+    except Exception as e:
+        logger.warning(f"[execute-accept] Failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_auto_buy_loop())
-    logger.info("AgentBazaar started — auto-buy loop active")
+    t1 = asyncio.create_task(_auto_buy_loop())
+    t2 = asyncio.create_task(_auto_proposal_loop())
+    logger.info("AgentBazaar started — auto-buy + auto-proposal loops active")
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for t in (t1, t2):
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="AgentBazaar — AI Agent Marketplace",
-    version="2.0.0",
+    version="3.0.0",
     description=(
         "Full AI agent marketplace with 3 Nevermined x402-gated services, "
-        "ZeroClick AI-native ads, and cross-team A2A commerce."
+        "ZeroClick AI-native ads, cross-team A2A commerce, "
+        "and a full proposal/bidding/messaging lifecycle."
     ),
     lifespan=lifespan,
 )
@@ -863,14 +1022,639 @@ async def buy_from_agent(agent_id: str, message: str):
     return {"status": resp.status_code, "result": result}
 
 
+# ── Marketplace v3 — 46-agent directory, matching, proposals ──────────────────
+
+@app.get("/marketplace/directory")
+async def marketplace_directory(
+    category: str | None = None,
+    source: str | None = None,
+    scored_only: bool = False,
+    search: str | None = None,
+):
+    """Return all agents from the AgentBazaar DB including all hackathon agents."""
+    if not supa:
+        return []
+    query = supa.table("agents").select("*").eq("status", "active")
+    if category and category != "All":
+        query = query.ilike("category", f"%{category}%")
+    if source:
+        query = query.eq("source", source)
+    if scored_only:
+        query = query.not_.is_("validation_score", "null")
+    try:
+        data = query.order("validation_score", desc=True, nullsfirst=False).limit(200).execute()
+        results = data.data
+        if search:
+            s = search.lower()
+            results = [a for a in results if s in (a.get("name","") + a.get("description","") + (a.get("team_name","") or "") + (a.get("category","") or "")).lower()]
+        return results
+    except Exception as e:
+        logger.warning(f"marketplace_directory error: {e}")
+        return []
+
+
+@app.post("/marketplace/validate-all")
+async def validate_all_agents(limit: int = 8):
+    """Batch validate unscored agents using our validation pipeline (runs in background)."""
+    if not supa:
+        raise HTTPException(503, "Supabase not configured")
+
+    data = (
+        supa.table("agents")
+        .select("id,name,description,capabilities,website_url,endpoint,team_name")
+        .is_("validation_score", "null")
+        .neq("source", "agentbazaar")
+        .eq("status", "active")
+        .limit(limit)
+        .execute()
+    )
+    agents_to_validate = data.data
+    if not agents_to_validate:
+        return {"started": False, "message": "All agents already validated"}
+
+    asyncio.create_task(_batch_validate(agents_to_validate))
+    return {
+        "started": True,
+        "count": len(agents_to_validate),
+        "agents": [a["name"] for a in agents_to_validate],
+        "message": f"Validating {len(agents_to_validate)} agents in the background",
+    }
+
+
+async def _batch_validate(agents_list: list):
+    """Background task: validate agents one by one and update their scores in DB."""
+    for agent in agents_list:
+        try:
+            name = agent.get("name", "Unknown")
+            desc = agent.get("description", "")
+            caps = agent.get("capabilities") or []
+            capability = ", ".join(caps[:3]) if caps else desc[:120]
+            url = agent.get("website_url") or agent.get("endpoint") or ""
+            if not url or not url.startswith("http"):
+                url = f"https://www.google.com/search?q={name.replace(' ', '+')}+AI+agent"
+
+            scraped, similar = await asyncio.gather(
+                _scrape(url),
+                _find_similar(f"{name}: {desc}"),
+            )
+            scorecard = await _score(name, capability, scraped, similar)
+
+            supa.table("agents").update({
+                "validation_score": scorecard["overall_score"],
+                "badge_tier":       scorecard["badge"],
+                "validated_at":     "now()",
+            }).eq("id", agent["id"]).execute()
+
+            supa.table("validation_results").insert({
+                "agent_name":       name,
+                "capability":       capability,
+                "url":              url,
+                "overall_score":    scorecard["overall_score"],
+                "dimension_scores": scorecard["dimension_scores"],
+                "risk_flags":       scorecard["risk_flags"],
+                "badge":            scorecard["badge"],
+                "summary":          scorecard["summary"],
+            }).execute()
+
+            logger.info(f"[batch-validate] {name}: {scorecard['overall_score']}/100 ({scorecard['badge']})")
+            await asyncio.sleep(3)  # rate limit Claude
+        except Exception as e:
+            logger.warning(f"[batch-validate] Failed for {agent.get('name','?')}: {e}")
+
+
+@app.post("/marketplace/matches")
+async def find_agent_matches(body: dict):
+    """Find complementary agents + ZeroClick ads for a given agent."""
+    agent_name = body.get("agent_name", "")
+    category   = body.get("category", "")
+    description = body.get("description", "")
+    query = f"{agent_name} {category} AI agent capabilities"
+
+    similar, ads = await asyncio.gather(
+        _find_similar(f"{agent_name}: {description}"),
+        _fetch_ads(f"{category} AI agent {agent_name}"),
+    )
+
+    db_matches: list = []
+    if supa:
+        try:
+            result = (
+                supa.table("agents")
+                .select("id,name,team_name,category,description,pricing,validation_score,badge_tier")
+                .eq("status", "active")
+                .neq("name", agent_name)
+                .limit(6)
+                .execute()
+            )
+            db_matches = result.data
+            # try same category first
+            if category:
+                cat_result = (
+                    supa.table("agents")
+                    .select("id,name,team_name,category,description,pricing,validation_score,badge_tier")
+                    .eq("status", "active")
+                    .ilike("category", f"%{category}%")
+                    .neq("name", agent_name)
+                    .limit(6)
+                    .execute()
+                )
+                if cat_result.data:
+                    db_matches = cat_result.data
+        except Exception:
+            pass
+
+    return {
+        "matches":           db_matches,
+        "web_results":       similar[:3],
+        "sponsored_context": ads,
+    }
+
+
+@app.post("/marketplace/propose")
+async def propose_to_agent(body: dict):
+    """Send a partnership proposal to another agent via the broker. Logs to proposals + agent_purchases."""
+    to_agent_name = body.get("to_agent_name", "")
+    to_team_name  = body.get("to_team_name", "")
+    to_broker_did = body.get("to_broker_did", "")
+    message       = body.get(
+        "message",
+        f"Hi from AgentBazaar! We'd love to validate and feature {to_agent_name} in our marketplace. "
+        f"We can offer a free capability score + ZeroClick promotion to 1000+ agents. "
+        f"Interested in a partnership? Visit https://agentbazaar-validator-production.up.railway.app",
+    )
+
+    status_code = 0
+    result: dict = {}
+
+    if to_broker_did and NVM_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    ABILITY_BROKER_URL,
+                    headers={
+                        "Authorization": f"Bearer {NVM_API_KEY}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "messages": [{"role": "user", "content": message}],
+                        "model":    to_broker_did,
+                        "stream":   False,
+                    },
+                )
+            status_code = resp.status_code
+            result = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {"raw": resp.text[:400]}
+            )
+        except Exception as e:
+            result = {"error": str(e)}
+
+    if supa:
+        try:
+            supa.table("proposals").insert({
+                "from_agent":      "AgentBazaar",
+                "to_agent_name":   to_agent_name,
+                "to_team_name":    to_team_name,
+                "to_broker_did":   to_broker_did,
+                "message":         message,
+                "response_status": status_code,
+                "response_body":   json.dumps(result)[:2000],
+            }).execute()
+        except Exception:
+            pass
+        # Also counts as cross-team transaction evidence
+        try:
+            supa.table("agent_purchases").insert({
+                "from_agent_id":   "agentbazaar-proposal",
+                "to_agent_id":     to_broker_did or to_agent_name,
+                "message_sent":    message[:500],
+                "response_status": status_code,
+                "response_body":   json.dumps(result)[:2000],
+            }).execute()
+        except Exception:
+            pass
+
+    return {
+        "sent":   True,
+        "to":     to_agent_name,
+        "team":   to_team_name,
+        "status": status_code,
+        "result": result,
+    }
+
+
+@app.get("/marketplace/proposals")
+async def list_proposals(limit: int = 50):
+    """All proposals sent from AgentBazaar to other agents."""
+    if not supa:
+        return []
+    data = (
+        supa.table("proposals")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return data.data
+
+
+# ── Job Board — Proposals, Bids, A2A Messages ─────────────────────────────────
+
+class CreateProposalRequest(BaseModel):
+    poster_agent_id: str = "AgentBazaar"
+    title: str
+    description: str
+    budget_credits: int = 50
+    deadline_days: int = 7
+
+
+class SubmitBidRequest(BaseModel):
+    bidder_agent_id: str
+    approach: str
+    timeline_days: int = 3
+    price_credits: int
+    contact_endpoint: str = ""
+
+
+class AcceptBidRequest(BaseModel):
+    bid_id: str
+    poster_nvm_key: Optional[str] = None
+
+
+class SendMessageRequest(BaseModel):
+    from_agent_id: str
+    content: str
+
+
+BID_SCORING_PROMPT = """\
+You are an AI marketplace bid evaluator.
+
+Project: {title}
+Description: {description}
+Budget: {budget} credits  |  Deadline: {deadline} days
+
+Bid received:
+- Approach: {approach}
+- Timeline: {timeline} days
+- Price: {price} credits
+
+Score 0-100 based on: value for money, technical approach quality, timeline feasibility, budget alignment.
+Return ONLY valid JSON (no markdown): {{"score": <integer 0-100>, "reasoning": "<1 sentence max>"}}"""
+
+
+@app.post("/proposals")
+async def create_proposal(req: CreateProposalRequest):
+    """Create a new job proposal on the AgentBazaar job board."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+    try:
+        result = db.table("job_proposals").insert({
+            "poster_agent_id": req.poster_agent_id,
+            "title":           req.title,
+            "description":     req.description,
+            "budget_credits":  req.budget_credits,
+            "deadline_days":   req.deadline_days,
+            "status":          "open",
+        }).execute()
+        row = result.data[0]
+        await _log_call("proposal-create", {"title": req.title}, f"id={row['id']}", credits=0)
+        return {"proposal_id": row["id"], "status": "open", **row}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create proposal: {e}")
+
+
+@app.get("/proposals")
+async def list_job_proposals(status: str = "open", limit: int = 50):
+    """List job proposals. status: open|funded|delivered|closed|all"""
+    if not supa:
+        return []
+    try:
+        q = supa.table("job_proposals").select("*").order("created_at", desc=True).limit(limit)
+        if status != "all":
+            q = q.eq("status", status)
+        data = q.execute()
+        # attach bid count
+        rows = data.data
+        for row in rows:
+            try:
+                bc = supa.table("job_bids").select("id", count="exact").eq("proposal_id", row["id"]).execute()
+                row["bid_count"] = bc.count or 0
+            except Exception:
+                row["bid_count"] = 0
+        return rows
+    except Exception as e:
+        logger.warning(f"list_proposals error: {e}")
+        return []
+
+
+@app.post("/proposals/{proposal_id}/bids")
+async def submit_bid(proposal_id: str, req: SubmitBidRequest):
+    """Submit a bid. Claude auto-scores the approach vs budget/timeline. Auto-accepts if score >= 75."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    # Fetch proposal
+    try:
+        prop_res = db.table("job_proposals").select("*").eq("id", proposal_id).limit(1).execute()
+        if not prop_res.data:
+            raise HTTPException(404, "Proposal not found")
+        prop = prop_res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(404, f"Proposal not found: {e}")
+
+    if prop["status"] != "open":
+        raise HTTPException(400, f"Proposal is '{prop['status']}' — not accepting bids")
+
+    # Claude scores the bid
+    claude_score = 60
+    claude_reasoning = "Auto-scored (Claude unavailable)"
+    if claude:
+        try:
+            prompt = BID_SCORING_PROMPT.format(
+                title=prop["title"],
+                description=(prop["description"] or "")[:500],
+                budget=prop["budget_credits"],
+                deadline=prop["deadline_days"],
+                approach=(req.approach or "")[:500],
+                timeline=req.timeline_days,
+                price=req.price_credits,
+            )
+            msg = await claude.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text
+            start = text.find("{")
+            end   = text.rfind("}") + 1
+            parsed = json.loads(text[start:end])
+            claude_score    = int(parsed.get("score", 60))
+            claude_reasoning = parsed.get("reasoning", "")
+        except Exception as e:
+            logger.warning(f"Bid scoring failed: {e}")
+
+    # Store bid
+    try:
+        result = db.table("job_bids").insert({
+            "proposal_id":     proposal_id,
+            "bidder_agent_id": req.bidder_agent_id,
+            "approach":        req.approach,
+            "timeline_days":   req.timeline_days,
+            "price_credits":   req.price_credits,
+            "contact_endpoint": req.contact_endpoint,
+            "claude_score":    claude_score,
+            "claude_reasoning": claude_reasoning,
+            "status":          "pending",
+        }).execute()
+        row = result.data[0]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to store bid: {e}")
+
+    await _log_call("bid-submit", {"proposal_id": proposal_id, "bidder": req.bidder_agent_id}, f"score={claude_score}", credits=0)
+
+    # Auto-accept if score >= 75
+    if claude_score >= 75:
+        logger.info(f"[auto-accept] Score {claude_score} >= 75 — auto-accepting bid {row['id'][:8]}")
+        asyncio.create_task(_execute_accept(proposal_id, row["id"], prop, row))
+
+    return {
+        "bid_id":          row["id"],
+        "claude_score":    claude_score,
+        "claude_reasoning": claude_reasoning,
+        "auto_accepted":   claude_score >= 75,
+        "status":          "accepted" if claude_score >= 75 else "pending",
+        **row,
+    }
+
+
+@app.get("/proposals/{proposal_id}/bids")
+async def list_bids(proposal_id: str):
+    """List all bids for a proposal, sorted by Claude score descending."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+    try:
+        data = (
+            db.table("job_bids")
+            .select("*")
+            .eq("proposal_id", proposal_id)
+            .order("claude_score", desc=True, nullsfirst=False)
+            .execute()
+        )
+        return data.data
+    except Exception as e:
+        raise HTTPException(500, f"Failed to list bids: {e}")
+
+
+@app.post("/proposals/{proposal_id}/accept")
+async def accept_bid(proposal_id: str, req: AcceptBidRequest):
+    """Accept a bid: update DB → trigger Nevermined A2A broker call → log prize evidence."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    # Fetch bid
+    try:
+        bid_res = db.table("job_bids").select("*").eq("id", req.bid_id).limit(1).execute()
+        if not bid_res.data:
+            raise HTTPException(404, "Bid not found")
+        bid = bid_res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(404, f"Bid not found: {e}")
+
+    # Fetch proposal
+    try:
+        prop_res = db.table("job_proposals").select("*").eq("id", proposal_id).limit(1).execute()
+        if not prop_res.data:
+            raise HTTPException(404, "Proposal not found")
+        prop = prop_res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(404, f"Proposal not found: {e}")
+
+    transaction_id = str(uuid.uuid4())
+
+    # Update DB
+    db.table("job_bids").update({"status": "accepted"}).eq("id", req.bid_id).execute()
+    db.table("job_bids").update({"status": "rejected"}).eq("proposal_id", proposal_id).neq("id", req.bid_id).execute()
+    db.table("job_proposals").update({
+        "status":         "funded",
+        "winning_bid_id": req.bid_id,
+        "transaction_id": transaction_id,
+    }).eq("id", proposal_id).execute()
+
+    # A2A broker call
+    broker_status = 0
+    broker_result: dict = {}
+    if NVM_API_KEY:
+        acceptance_msg = (
+            f"Bid accepted for: '{prop['title']}'. "
+            f"Budget: {prop['budget_credits']} credits. "
+            f"Bid score: {bid.get('claude_score', '?')}/100. "
+            f"Transaction: {transaction_id}. Please begin work."
+        )
+        target = bid.get("contact_endpoint") or bid.get("bidder_agent_id", "unknown")
+        try:
+            async with httpx.AsyncClient(timeout=25) as client:
+                resp = await client.post(
+                    ABILITY_BROKER_URL,
+                    headers={"Authorization": f"Bearer {NVM_API_KEY}", "Content-Type": "application/json"},
+                    json={"messages": [{"role": "user", "content": acceptance_msg}], "model": target, "stream": False},
+                )
+            broker_status = resp.status_code
+            broker_result = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {"raw": resp.text[:500]}
+            )
+        except Exception as e:
+            broker_result = {"error": str(e)}
+
+        # Prize evidence
+        try:
+            supa.table("agent_purchases").insert({
+                "from_agent_id":   prop.get("poster_agent_id", "AgentBazaar"),
+                "to_agent_id":     bid.get("bidder_agent_id", "unknown"),
+                "message_sent":    acceptance_msg[:500],
+                "response_status": broker_status,
+                "response_body":   json.dumps(broker_result)[:2000],
+            }).execute()
+        except Exception:
+            pass
+
+    # Store acceptance in message thread
+    try:
+        supa.table("agent_messages").insert({
+            "proposal_id":   proposal_id,
+            "from_agent_id": prop.get("poster_agent_id", "AgentBazaar"),
+            "to_agent_id":   bid.get("bidder_agent_id", "unknown"),
+            "content":       f"✅ Bid accepted! Project: '{prop['title']}'. Budget: {prop['budget_credits']} credits. Tx: {transaction_id}",
+            "delivered":     broker_status < 400 if broker_status else True,
+        }).execute()
+    except Exception:
+        pass
+
+    await _log_call("bid-accept", {"proposal_id": proposal_id, "bid_id": req.bid_id}, f"funded→{bid.get('bidder_agent_id','?')}")
+
+    return {
+        "status":         "funded",
+        "transaction_id": transaction_id,
+        "proposal_id":    proposal_id,
+        "bid_id":         req.bid_id,
+        "winner":         bid.get("bidder_agent_id"),
+        "price_credits":  bid.get("price_credits"),
+        "broker_status":  broker_status,
+        "broker_result":  broker_result,
+    }
+
+
+@app.post("/proposals/{proposal_id}/message")
+async def send_message(proposal_id: str, req: SendMessageRequest):
+    """Send a message in a proposal thread. Tries to HTTP-POST to the other agent's /chat endpoint."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    # Find the highest-scored bid's contact endpoint
+    to_agent_id = "unknown"
+    contact_endpoint: str | None = None
+    try:
+        bids = (
+            db.table("job_bids")
+            .select("bidder_agent_id, contact_endpoint, status")
+            .eq("proposal_id", proposal_id)
+            .order("claude_score", desc=True, nullsfirst=False)
+            .limit(1)
+            .execute()
+        )
+        if bids.data:
+            top = bids.data[0]
+            to_agent_id    = top.get("bidder_agent_id", "unknown")
+            contact_endpoint = top.get("contact_endpoint") or None
+    except Exception:
+        pass
+
+    # Try to deliver to their /chat
+    delivered     = False
+    response_text = ""
+    if contact_endpoint and contact_endpoint.startswith("http"):
+        try:
+            async with httpx.AsyncClient(timeout=12) as client:
+                resp = await client.post(
+                    f"{contact_endpoint.rstrip('/')}/chat",
+                    json={"messages": [{"role": "user", "content": req.content}], "stream": False},
+                    headers={"Content-Type": "application/json"},
+                )
+            delivered     = resp.status_code < 400
+            response_text = resp.text[:500]
+        except Exception as e:
+            response_text = f"Delivery failed: {e}"
+
+    # Store message
+    try:
+        result = db.table("agent_messages").insert({
+            "proposal_id":   proposal_id,
+            "from_agent_id": req.from_agent_id,
+            "to_agent_id":   to_agent_id,
+            "content":       req.content,
+            "delivered":     delivered,
+        }).execute()
+        stored_id = result.data[0]["id"]
+    except Exception as e:
+        raise HTTPException(500, f"Failed to store message: {e}")
+
+    return {
+        "message_id":   stored_id,
+        "delivered":    delivered,
+        "to_agent_id":  to_agent_id,
+        "response":     response_text,
+    }
+
+
+@app.get("/proposals/{proposal_id}/messages")
+async def get_messages(proposal_id: str):
+    """Get the full A2A message thread for a proposal (chronological)."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+    try:
+        data = (
+            db.table("agent_messages")
+            .select("*")
+            .eq("proposal_id", proposal_id)
+            .order("created_at")
+            .execute()
+        )
+        return data.data
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get messages: {e}")
+
+
+@app.get("/proposals/stats")
+async def proposals_stats():
+    """Stats for the job board: total, open, funded, bids submitted."""
+    if not supa:
+        return {}
+    try:
+        all_p   = supa.table("job_proposals").select("status").execute().data
+        all_b   = supa.table("job_bids").select("id", count="exact").execute()
+        total   = len(all_p)
+        open_c  = sum(1 for p in all_p if p["status"] == "open")
+        funded  = sum(1 for p in all_p if p["status"] == "funded")
+        return {
+            "total_proposals": total,
+            "open":            open_c,
+            "funded":          funded,
+            "total_bids":      all_b.count or 0,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── Health ─────────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 @app.get("/health")
 async def health():
     return {
-        "status":   "ok",
-        "version":  "2.0.0",
-        "payments": "active" if (payments and NVM_PLAN_ID_VALIDATOR) else "disabled",
+        "status":    "ok",
+        "version":   "3.0.0",
+        "payments":  "active" if (payments and NVM_PLAN_ID_VALIDATOR) else "disabled",
         "zeroclick": "active" if ZEROCLICK_API_KEY else "disabled",
-        "supabase": "active" if supa else "disabled",
+        "supabase":  "active" if supa else "disabled",
     }

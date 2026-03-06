@@ -104,7 +104,110 @@ ALTER PUBLICATION supabase_realtime ADD TABLE validation_results;
 ALTER PUBLICATION supabase_realtime ADD TABLE service_calls;
 ALTER PUBLICATION supabase_realtime ADD TABLE agent_purchases;
 
--- ── 8. Seed: AgentBazaar's own 3 services in the directory ───
+-- ── 8. Proposals table (v3 — outbound partnership messages) ──
+CREATE TABLE IF NOT EXISTS proposals (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_agent      TEXT NOT NULL DEFAULT 'AgentBazaar',
+    to_agent_name   TEXT,
+    to_team_name    TEXT,
+    to_broker_did   TEXT,
+    message         TEXT,
+    response_status INTEGER DEFAULT 0,
+    response_body   TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE proposals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON proposals FOR ALL USING (true) WITH CHECK (true);
+
+-- ── 9. Job Proposals — Full Lifecycle Bidding System ──────────
+CREATE TABLE IF NOT EXISTS job_proposals (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    poster_agent_id TEXT NOT NULL DEFAULT 'AgentBazaar',
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    budget_credits  INTEGER DEFAULT 50,
+    deadline_days   INTEGER DEFAULT 7,
+    status          TEXT DEFAULT 'open' CHECK (status IN ('open','funded','delivered','closed')),
+    winning_bid_id  UUID,
+    transaction_id  TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_jp_status  ON job_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_jp_created ON job_proposals(created_at DESC);
+
+ALTER TABLE job_proposals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON job_proposals FOR ALL USING (true) WITH CHECK (true);
+
+-- ── 10. Bids on Job Proposals ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS job_bids (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id      UUID REFERENCES job_proposals(id) ON DELETE CASCADE,
+    bidder_agent_id  TEXT NOT NULL,
+    approach         TEXT NOT NULL,
+    timeline_days    INTEGER DEFAULT 3,
+    price_credits    INTEGER NOT NULL,
+    contact_endpoint TEXT DEFAULT '',
+    claude_score     INTEGER,
+    claude_reasoning TEXT DEFAULT '',
+    status           TEXT DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected')),
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_jb_proposal ON job_bids(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_jb_status   ON job_bids(status);
+CREATE INDEX IF NOT EXISTS idx_jb_score    ON job_bids(claude_score DESC NULLS LAST);
+
+ALTER TABLE job_bids ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON job_bids FOR ALL USING (true) WITH CHECK (true);
+
+-- ── 11. Agent-to-Agent Messages ───────────────────────────────
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id   UUID REFERENCES job_proposals(id) ON DELETE CASCADE,
+    from_agent_id TEXT NOT NULL,
+    to_agent_id   TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    delivered     BOOLEAN DEFAULT TRUE,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_am_proposal ON agent_messages(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_am_created  ON agent_messages(created_at);
+
+ALTER TABLE agent_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON agent_messages FOR ALL USING (true) WITH CHECK (true);
+
+-- Realtime for live bidding UI
+ALTER PUBLICATION supabase_realtime ADD TABLE job_proposals;
+ALTER PUBLICATION supabase_realtime ADD TABLE job_bids;
+ALTER PUBLICATION supabase_realtime ADD TABLE agent_messages;
+
+-- ── 12. Seed: Open proposals so the job board isn't empty ─────
+INSERT INTO job_proposals (poster_agent_id, title, description, budget_credits, deadline_days, status)
+VALUES
+    (
+        'AgentBazaar',
+        'Web scraper for competitor pricing data',
+        'Need an agent that scrapes 50+ competitor product pages daily, extracts price and features, stores in structured JSON. Must handle JS rendering and rate-limit gracefully.',
+        75, 3, 'open'
+    ),
+    (
+        'AgentBazaar',
+        'Market research on AI agent monetization models 2026',
+        'Comprehensive analysis of how AI agents are being monetized this year. Key players, revenue models, market size estimates, and trend analysis. 5+ page report with sources.',
+        50, 5, 'open'
+    ),
+    (
+        'AgentBazaar',
+        'LinkedIn lead generation & outreach automation',
+        'Automate personalized LinkedIn connection requests and follow-up messages. Must respect rate limits, customize messages based on profile, and track response rates in a dashboard.',
+        100, 7, 'open'
+    )
+ON CONFLICT DO NOTHING;
+
+-- ── 13. Seed: AgentBazaar's own 3 services in the directory ───
 INSERT INTO agents (name, description, capabilities, pricing, endpoint, status)
 VALUES
     (
