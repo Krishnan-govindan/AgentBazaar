@@ -1,24 +1,24 @@
 """
-register_agents.py — Register all 3 AgentBazaar services on Nevermined
-=======================================================================
-Run ONCE after deploying to Railway. Each service gets its own agent DID
-and payment plan. Copy the output IDs into Railway environment variables.
+register_agents.py — Register ONE combined AgentBazaar agent on Nevermined
+===========================================================================
+Run ONCE after deploying to Railway. A single agent + plan covers all services:
+  - POST /validate  (Agent Validator — 1 credit/call)
+  - POST /research  (Market Research — 1 credit/call)
+  - GET  /agents    (Agent Directory — free)
+
+Other teams only need ONE plan ID to buy from AgentBazaar.
 
 Usage:
     export NVM_API_KEY=sandbox:your-key
     export BACKEND_URL=https://your-app.up.railway.app
     python register_agents.py
 
-Output:
-    PLAN_ID_VALIDATOR=did:nv:xxx
-    PLAN_ID_RESEARCH=did:nv:xxx
-    AGENT_ID_VALIDATOR=did:nv:xxx
-    AGENT_ID_RESEARCH=did:nv:xxx
-    AGENT_ID_DIRECTORY=did:nv:xxx
+Output (copy to Railway > Settings > Variables):
+    NVM_PLAN_ID=<plan-id>
+    NVM_AGENT_ID=<agent-id>
 """
 
 import os
-import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,60 +37,10 @@ USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 
 DATE_CREATED = "2026-03-06T00:00:00Z"
 
-# ── Services to register ───────────────────────────────────────────────────────
-SERVICES = [
-    {
-        "env_prefix":         "VALIDATOR",
-        "name":               "AgentBazaar — Agent Validator",
-        "description":        (
-            "Score any AI agent proposal 0-100 using Claude AI + Apify web scraping + "
-            "Exa semantic search. Returns a structured scorecard with badge tier, "
-            "5 dimension scores, risk flags, and ZeroClick sponsored insights."
-        ),
-        "tags":               ["validation", "scoring", "ai-agents", "apify", "exa", "claude"],
-        "method":             "POST",
-        "endpoint":           f"{BACKEND_URL}/validate",
-        "price_usdc":         250_000,   # $0.25 (USDC has 6 decimals)
-        "credits":            100,
-        "credits_per_request": 1,
-    },
-    {
-        "env_prefix":         "RESEARCH",
-        "name":               "AgentBazaar — Market Research",
-        "description":        (
-            "Instant AI-powered market research brief on any topic. "
-            "Uses Exa deep search (3 query variations) + Claude synthesis for "
-            "executive summaries, key findings, and market data. "
-            "Includes ZeroClick sponsored commercial context."
-        ),
-        "tags":               ["research", "market-analysis", "exa", "claude", "intelligence"],
-        "method":             "POST",
-        "endpoint":           f"{BACKEND_URL}/research",
-        "price_usdc":         500_000,   # $0.50
-        "credits":            100,
-        "credits_per_request": 1,
-    },
-    {
-        "env_prefix":         "DIRECTORY",
-        "name":               "AgentBazaar — Agent Directory",
-        "description":        (
-            "Browse all registered AI agents in the AgentBazaar marketplace. "
-            "Returns agent names, capabilities, pricing, endpoints, and plan DIDs. "
-            "Free to access — no credits required."
-        ),
-        "tags":               ["directory", "discovery", "agents", "marketplace", "free"],
-        "method":             "GET",
-        "endpoint":           f"{BACKEND_URL}/agents",
-        "price_usdc":         0,
-        "credits":            10_000,
-        "credits_per_request": 0,
-    },
-]
 
-
-def register_all():
+def register_combined():
     print(f"\n{'='*60}")
-    print(f"  AgentBazaar — Nevermined Agent Registration")
+    print(f"  AgentBazaar — Single Combined Agent Registration")
     print(f"  Backend: {BACKEND_URL}")
     print(f"  Environment: {NVM_ENVIRONMENT}")
     print(f"{'='*60}\n")
@@ -99,81 +49,79 @@ def register_all():
         PaymentOptions(nvm_api_key=NVM_API_KEY, environment=NVM_ENVIRONMENT)
     )
 
-    results: dict[str, dict] = {}
+    agent_metadata = {
+        "name": "AgentBazaar — AI Agent Marketplace",
+        "description": (
+            "Full AI agent marketplace in one plan: "
+            "validate any agent 0-100 (Claude AI + Apify web scraping + Exa semantic search), "
+            "run AI-powered market research (Exa 3-query variations + Claude synthesis), "
+            "and browse the live agent directory. "
+            "Every paid response includes ZeroClick AI-native sponsored context. "
+            "ABTS trust scores, star ratings, and cross-team A2A buying included."
+        ),
+        "tags": [
+            "marketplace", "validation", "research", "directory",
+            "ai-agents", "apify", "exa", "claude", "zeroclick", "abts",
+        ],
+        "dateCreated": DATE_CREATED,
+    }
 
-    for svc in SERVICES:
-        print(f"\n{'─'*50}")
-        print(f"  Registering: {svc['name']}")
-        print(f"{'─'*50}")
+    agent_api = {
+        "endpoints": [
+            {"POST": f"{BACKEND_URL}/validate"},
+            {"POST": f"{BACKEND_URL}/research"},
+            {"GET":  f"{BACKEND_URL}/agents"},
+            {"GET":  f"{BACKEND_URL}/marketplace/directory"},
+            {"POST": f"{BACKEND_URL}/marketplace/buy"},
+        ],
+        "agentDefinitionUrl": f"{BACKEND_URL}/openapi.json",
+    }
 
-        agent_metadata = {
-            "name":        svc["name"],
-            "description": svc["description"],
-            "tags":        svc["tags"],
-            "dateCreated": DATE_CREATED,
-        }
+    plan_metadata = {
+        "name": "AgentBazaar — Combined Pay-per-Use Plan",
+        "description": (
+            "Access all AgentBazaar services under one plan. "
+            "100 credits included at $0.25 USDC. "
+            "1 credit per validate or research call. Directory browsing is free."
+        ),
+        "dateCreated": DATE_CREATED,
+    }
 
-        agent_api = {
-            "endpoints":           [{svc["method"]: svc["endpoint"]}],
-            "agentDefinitionUrl":  f"{BACKEND_URL}/openapi.json",
-        }
+    # $0.25 USDC = 250_000 micro-USDC (6 decimals), 100 credits, 1 credit per call
+    price_config   = get_erc20_price_config(250_000, USDC_ADDRESS, BUILDER_ADDRESS)
+    credits_config = get_fixed_credits_config(100, 1)
 
-        if svc["price_usdc"] == 0:
-            price_desc = "Free access."
-        else:
-            price_desc = f"${svc['price_usdc']/1_000_000:.2f} USDC per {svc['credits']} credits."
-        plan_metadata = {
-            "name":        f"{svc['name']} — Pay-per-Use Plan",
-            "description": (
-                f"Access to {svc['name']}. "
-                f"{svc['credits']} credits included. "
-                f"{price_desc}"
-            ),
-            "dateCreated": DATE_CREATED,
-        }
+    try:
+        agent_info = payments.agents.register_agent_and_plan(
+            agent_metadata,
+            agent_api,
+            plan_metadata,
+            price_config,
+            credits_config,
+            "credits",
+        )
 
-        price_config   = get_erc20_price_config(svc["price_usdc"], USDC_ADDRESS, BUILDER_ADDRESS)
-        credits_config = get_fixed_credits_config(svc["credits"], max(svc["credits_per_request"], 1))
+        agent_id = agent_info["agentId"]
+        plan_id  = agent_info["planId"]
 
-        try:
-            agent_info = payments.agents.register_agent_and_plan(
-                agent_metadata,
-                agent_api,
-                plan_metadata,
-                price_config,
-                credits_config,
-                "credits",
-            )
+        print(f"  ✅  Agent ID : {agent_id}")
+        print(f"  ✅  Plan ID  : {plan_id}")
+        print(f"  🌐  View at  : https://nevermined.app/en/agents/{agent_id}")
 
-            agent_id = agent_info["agentId"]
-            plan_id  = agent_info["planId"]
+        print(f"\n{'='*60}")
+        print("  COPY THESE TO Railway > Settings > Variables")
+        print(f"{'='*60}\n")
+        print(f"NVM_PLAN_ID={plan_id}")
+        print(f"NVM_AGENT_ID={agent_id}")
+        print()
+        print(f"{'='*60}")
+        print(f"  Also set:  BACKEND_URL={BACKEND_URL}")
+        print(f"{'='*60}\n")
 
-            results[svc["env_prefix"]] = {"agent_id": agent_id, "plan_id": plan_id}
-
-            print(f"  ✅  Agent ID : {agent_id}")
-            print(f"  ✅  Plan ID  : {plan_id}")
-            print(f"  🌐  View at  : https://nevermined.app/en/agents/{agent_id}")
-
-        except Exception as e:
-            print(f"  ❌  Failed: {e}")
-            results[svc["env_prefix"]] = {"error": str(e)}
-
-    # ── Print summary ────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print("  SUMMARY — copy these to Railway > Settings > Variables")
-    print(f"{'='*60}\n")
-
-    for prefix, info in results.items():
-        if "error" not in info:
-            print(f"PLAN_ID_{prefix}={info['plan_id']}")
-            print(f"AGENT_ID_{prefix}={info['agent_id']}")
-            print()
-
-    print(f"{'='*60}")
-    print("  Also set:")
-    print(f"  BACKEND_URL={BACKEND_URL}")
-    print(f"{'='*60}\n")
+    except Exception as e:
+        print(f"  ❌  Registration failed: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    register_all()
+    register_combined()
