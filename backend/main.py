@@ -1232,45 +1232,50 @@ async def list_agents():
 # ── Marketplace — cross-team A2A ───────────────────────────────────────────────
 @app.get("/marketplace/agents")
 async def marketplace_agents():
-    """Discover other teams' registered agents via the Ability.ai broker."""
-    if not NVM_API_KEY:
-        raise HTTPException(503, "NVM_API_KEY not configured")
+    """Discover other teams' registered agents via the Nevermined hackathon discovery API."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                ABILITY_BROKER_URL,
-                headers={
-                    "Authorization":  f"Bearer {NVM_API_KEY}",
-                    "Content-Type":   "application/json",
-                },
-                json={
-                    "messages": [{"role": "user", "content": "list all available agents"}],
-                    "model":    "list",
-                    "stream":   False,
-                },
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                NVM_DISCOVER_URL,
+                headers={"x-nvm-api-key": NVM_API_KEY} if NVM_API_KEY else {},
             )
-        return resp.json() if resp.status_code == 200 else {"agents": [], "raw": resp.text[:500]}
+        if resp.status_code == 200:
+            return resp.json()
+        return {"agents": [], "raw": resp.text[:500]}
     except Exception as e:
         return {"agents": [], "error": str(e)}
 
 
 @app.post("/marketplace/buy")
-async def marketplace_buy(agent_id: str, message: str, request: Request):
+async def marketplace_buy(agent_id: str, message: str, plan_id: str = "", request: Request = None):
     """
     Buy a service from another team's agent via Ability.ai broker.
+    If plan_id is provided, generates a x402 payment-signature JWT to attach.
     Every purchase is logged to agent_purchases for cross-team transaction evidence.
     """
     if not NVM_API_KEY:
         raise HTTPException(503, "NVM_API_KEY not configured")
 
+    # Build headers — optionally include payment-signature for x402 plans
+    broker_headers: dict = {
+        "Authorization": f"Bearer {NVM_API_KEY}",
+        "Content-Type":  "application/json",
+    }
+    if plan_id and payments:
+        try:
+            token_r = payments.x402.get_x402_access_token(plan_id=plan_id)
+            tok = token_r.get("accessToken", "")
+            if tok:
+                broker_headers["payment-signature"] = tok
+                logger.info(f"[buy] Attached x402 payment-signature for plan {plan_id[:20]}...")
+        except Exception as te:
+            logger.warning(f"[buy] Could not get x402 token: {te}")
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 ABILITY_BROKER_URL,
-                headers={
-                    "Authorization": f"Bearer {NVM_API_KEY}",
-                    "Content-Type":  "application/json",
-                },
+                headers=broker_headers,
                 json={
                     "message": message,   # Ability.ai broker uses singular "message"
                     "model":   agent_id,

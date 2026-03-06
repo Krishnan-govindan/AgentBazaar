@@ -27,7 +27,16 @@ export default function Dashboard() {
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [isLive, setIsLive] = useState(false);
   const [backendError, setBackendError] = useState<string | null>(null);
-  const [latestAds, _setLatestAds] = useState<SponsoredAd[]>([]);
+  const [latestAds, setLatestAds] = useState<SponsoredAd[]>([]);
+
+  const fetchAds = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/ads/match?q=ai+agent+marketplace+validate+nevermined`);
+      if (res.ok) setLatestAds(await res.json());
+    } catch {
+      // silently skip
+    }
+  }, []);
 
   const fetchFeed = useCallback(async () => {
     try {
@@ -62,6 +71,7 @@ export default function Dashboard() {
   useEffect(() => {
     fetchFeed();
     fetchStats();
+    fetchAds();
 
     if (!supabaseConfigured || !supabase) return;
 
@@ -97,7 +107,7 @@ export default function Dashboard() {
     return () => {
       supabase!.removeChannel(channel);
     };
-  }, [fetchFeed, fetchStats]);
+  }, [fetchFeed, fetchStats, fetchAds]);
 
   return (
     <Layout isLive={isLive}>
