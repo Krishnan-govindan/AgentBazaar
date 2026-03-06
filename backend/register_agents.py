@@ -118,12 +118,16 @@ def register_all():
             "agentDefinitionUrl":  f"{BACKEND_URL}/openapi.json",
         }
 
+        if svc["price_usdc"] == 0:
+            price_desc = "Free access."
+        else:
+            price_desc = f"${svc['price_usdc']/1_000_000:.2f} USDC per {svc['credits']} credits."
         plan_metadata = {
             "name":        f"{svc['name']} — Pay-per-Use Plan",
             "description": (
                 f"Access to {svc['name']}. "
                 f"{svc['credits']} credits included. "
-                f"{'Free access.' if svc['price_usdc'] == 0 else f'${svc[\"price_usdc\"]/1_000_000:.2f} USDC per {svc[\"credits\"]} credits.'}"
+                f"{price_desc}"
             ),
             "dateCreated": DATE_CREATED,
         }
