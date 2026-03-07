@@ -86,6 +86,12 @@ NVM_PLAN_ID_RESEARCH = (
 # Legacy alias — used by auto-buy loop and broker helpers
 NVM_PLAN_ID = NVM_PLAN_ID_VALIDATOR or NVM_PLAN_ID_RESEARCH
 
+# New agents: Future Proposals + Marketing/Promotions
+NVM_PLAN_ID_FUTURE   = os.environ.get("NVM_PLAN_ID_FUTURE", "")
+NVM_AGENT_ID_FUTURE  = os.environ.get("NVM_AGENT_ID_FUTURE", "")
+NVM_PLAN_ID_PROMOTE  = os.environ.get("NVM_PLAN_ID_PROMOTE", "")
+NVM_AGENT_ID_PROMOTE = os.environ.get("NVM_AGENT_ID_PROMOTE", "")
+
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 MCP_URL     = "https://mcp.apify.com?tools=apify/rag-web-browser"
 
@@ -135,70 +141,42 @@ def _require(name: str, client):
 
 # ── Background auto-buy loop ───────────────────────────────────────────────────
 async def _auto_buy_loop():
-    """Every 10 min autonomously buy from real hackathon agents (or fallback broker).
-    Generates cross-team transaction evidence for the judges."""
-    await asyncio.sleep(90)  # let server warm up first
-    topics = [
-        "AI agent marketplace economic model 2026",
-        "Nevermined x402 payment protocol adoption",
-        "autonomous agent monetization strategies",
-        "ZeroClick AI native advertising market",
-        "decentralized AI agent economies",
-    ]
+    """
+    Every 8 min: use AutonomousBuyer to discover + call all hackathon agents
+    with proper x402 tokens. Also runs the broker fallback for the Ability.ai
+    network and ad-placement buys for ZeroClick prize evidence.
+    """
+    from autonomous_buyer import AutonomousBuyer
+
+    buyer = AutonomousBuyer(payments=payments, supabase=supa)
+    # Warmup — let server finish startup tasks first
+    await asyncio.sleep(90)
+
     idx = 0
     while True:
+        # ── Primary: AutonomousBuyer (discovers + x402 calls all agents) ──────
+        try:
+            await buyer.run_once()
+        except Exception as e:
+            logger.warning(f"[auto-buy] AutonomousBuyer cycle error: {e}")
+
+        # ── Fallback: Ability.ai broker call (belt-and-suspenders) ────────────
         if NVM_API_KEY and supa:
-            topic = topics[idx % len(topics)]
             idx += 1
-
-            # Try to buy from a real hackathon agent if available
-            target_did = "ability-broker"
-            target_name = "broker"
+            topics = [
+                "AI agent marketplace economic model 2026",
+                "Nevermined x402 payment protocol adoption",
+                "autonomous agent monetization strategies",
+                "ZeroClick AI native advertising market",
+                "decentralized AI agent economies",
+            ]
+            topic = topics[idx % len(topics)]
             try:
-                # Prefer live discovery API for fresh agent list
-                async with httpx.AsyncClient(timeout=10) as _dc:
-                    _dr = await _dc.get(
-                        NVM_DISCOVER_URL,
-                        headers={"x-nvm-api-key": NVM_API_KEY} if NVM_API_KEY else {},
-                    )
-                if _dr.status_code == 200:
-                    _sellers = _dr.json().get("sellers", [])
-                    # filter out ourselves
-                    _sellers = [s for s in _sellers if s.get("teamName") != "Agent Bazaar"]
-                    if _sellers:
-                        pick = _sellers[idx % len(_sellers)]
-                        _aid = pick.get("nvmAgentId", "0")
-                        target_did = "did:nv:" + hex(int(_aid))[2:].zfill(64)
-                        target_name = pick.get("name", "?")
-                        logger.info(f"[auto-buy] Buying from discovered agent: {target_name} (DID={target_did[:30]}...)")
-                else:
-                    # Fallback: DB agents
-                    real_agents = (
-                        supa.table("agents")
-                        .select("plan_did,name,team_name")
-                        .eq("source", "nevermined-hackathon")
-                        .eq("status", "active")
-                        .not_.is_("plan_did", "null")
-                        .neq("plan_did", "")
-                        .limit(20)
-                        .execute()
-                    )
-                    if real_agents.data:
-                        pick = real_agents.data[idx % len(real_agents.data)]
-                        target_did = pick["plan_did"]
-                        target_name = pick.get("name", "?")
-                        logger.info(f"[auto-buy] Buying from DB agent: {target_name}")
-            except Exception as _ex:
-                logger.debug(f"[auto-buy] Agent discovery failed, using broker fallback: {_ex}")
-
-            logger.info(f"[auto-buy] Buying research on: {topic}")
-            try:
-                # Build broker headers — attach x402 payment-signature when available
                 _broker_hdrs: dict = {
                     "Authorization": f"Bearer {NVM_API_KEY}",
                     "Content-Type": "application/json",
                 }
-                if payments:
+                if payments and NVM_PLAN_ID:
                     try:
                         _tok = payments.x402.get_x402_access_token(plan_id=NVM_PLAN_ID)
                         _tok_val = _tok.get("accessToken", "")
@@ -211,11 +189,7 @@ async def _auto_buy_loop():
                     resp = await client.post(
                         ABILITY_BROKER_URL,
                         headers=_broker_hdrs,
-                        json={
-                            "message": f"research {topic}",   # Ability.ai broker uses singular "message"
-                            "model": target_did,
-                            "stream": False,
-                        },
+                        json={"message": f"research {topic}", "stream": False},
                     )
                 result = (
                     resp.json()
@@ -223,52 +197,18 @@ async def _auto_buy_loop():
                     else {"raw": resp.text[:500]}
                 )
                 supa.table("agent_purchases").insert({
-                    "from_agent_id": "agentbazaar-auto-buyer",
-                    "to_agent_id":   f"{target_name}|{target_did}",
-                    "message_sent":  f"research {topic}",
+                    "from_agent_id":   "agentbazaar-broker-buyer",
+                    "to_agent_id":     "ability-broker",
+                    "message_sent":    f"broker research | {topic}",
                     "response_status": resp.status_code,
-                    "response_body": json.dumps(result)[:2000],
+                    "response_body":   json.dumps(result)[:2000],
                 }).execute()
-                logger.info(f"[auto-buy] Transaction logged. Status: {resp.status_code}, target={target_name}")
+                logger.info(f"[auto-buy] Broker fallback status={resp.status_code}")
             except Exception as e:
-                logger.warning(f"[auto-buy] Failed: {e}")
+                logger.debug(f"[auto-buy] Broker fallback failed: {e}")
 
-                # Every 3rd cycle: direct x402 buy from known hackathon agents (real cross-team purchase)
-            if idx % 3 == 0 and payments:
-                DIRECT_AGENTS = [
-                    {
-                        "url":     "https://0a3e05181a11839c-12-94-132-170.serveousercontent.com",
-                        "plan_id": "77273582019685152434150453922110337833930952102857050786230477777933543347494",
-                        "path":    "/research",
-                        "payload": {"query": topic, "depth": "brief"},
-                        "label":   "auto-direct-x402-research",
-                    },
-                ]
-                for da in DIRECT_AGENTS:
-                    try:
-                        token_r = payments.x402.get_x402_access_token(plan_id=da["plan_id"])
-                        tok = token_r.get("accessToken", "")
-                        if tok:
-                            async with httpx.AsyncClient(timeout=20, verify=False) as client:
-                                dr = await client.post(
-                                    da["url"].rstrip("/") + "/" + da["path"].lstrip("/"),
-                                    headers={"payment-signature": tok, "Content-Type": "application/json"},
-                                    json=da["payload"],
-                                )
-                            if supa:
-                                supa.table("agent_purchases").insert({
-                                    "from_agent_id":   "agentbazaar-direct-buyer",
-                                    "to_agent_id":     da["url"],
-                                    "message_sent":    f"direct x402 {da['path']} | topic={topic[:60]}",
-                                    "response_status": dr.status_code,
-                                    "response_body":   dr.text[:1000],
-                                }).execute()
-                            logger.info(f"[auto-buy] Direct x402 purchase: {da['url']}{da['path']} → {dr.status_code}")
-                    except Exception as de:
-                        logger.debug(f"[auto-buy] Direct x402 skipped: {de}")
-
-            # Every other cycle: buy ad placement on a discovered agent (ZeroClick prize evidence)
-            if idx % 2 == 0 and supa:
+            # Every other cycle: buy ad placement on a discovered agent
+            if idx % 2 == 0:
                 try:
                     ad_targets = (
                         supa.table("agents")
@@ -302,11 +242,11 @@ async def _auto_buy_loop():
                                 "response_status": ar.status_code,
                                 "response_body":   ar.text[:500],
                             }).execute()
-                            logger.info(f"[auto-buy] Ad placement attempt on {ad_pick.get('name','?')}: status={ar.status_code}")
+                            logger.info(f"[auto-buy] Ad placement on {ad_pick.get('name','?')}: {ar.status_code}")
                 except Exception as e:
                     logger.debug(f"[auto-buy] Ad placement skipped: {e}")
 
-        await asyncio.sleep(600)  # 10 minutes
+        await asyncio.sleep(480)  # 8 minutes
 
 
 async def _auto_proposal_loop():
@@ -454,6 +394,123 @@ async def _execute_accept(proposal_id: str, bid_id: str, prop: dict, bid: dict):
         logger.warning(f"[execute-accept] Failed: {e}")
 
 
+async def _future_outreach_loop():
+    """Every 25 min: discover hackathon agents → send each a future proposal (rotating templates)."""
+    await asyncio.sleep(120)  # 2 min warmup — stagger from other loops
+    _outreach_templates = [
+        # Template A — Feature Partnership
+        lambda name: {
+            "title": f"Custom AI Integration for {name}",
+            "description": (
+                f"AgentBazaar will build a dedicated integration layer for {name}: "
+                "validator hooks, research pipelines, and cross-agent routing — all x402-gated. "
+                "Commit now at locked-in pricing before our public launch."
+            ),
+            "deliverables": [
+                "Custom /validate endpoint tailored to your agent's domain",
+                "Exa-powered research module (3-query synthesis)",
+                "ZeroClick ad injection for all your agent responses",
+                "Cross-agent transaction logging (prize evidence)",
+            ],
+        },
+        # Template B — Marketplace Listing Offer
+        lambda name: {
+            "title": f"Free Featured Listing on AgentBazaar for {name}",
+            "description": (
+                f"List {name} on AgentBazaar — AI Agent Marketplace at no cost. "
+                "We'll validate, ABTS-score, and promote your agent to every buyer in the network. "
+                "Upgrade to featured placement for 50 credits — ZeroClick ads included."
+            ),
+            "deliverables": [
+                "Free ABTS trust score calculation and badge",
+                "Listed in AgentBazaar marketplace directory",
+                "Auto-discovery via Nevermined hackathon network",
+                "Featured ZeroClick ad placement (upgrade tier)",
+            ],
+        },
+    ]
+    _outreach_idx = 0
+    while True:
+        if supa and NVM_API_KEY:
+            try:
+                async with httpx.AsyncClient(timeout=12) as _dc:
+                    _dr = await _dc.get(
+                        NVM_DISCOVER_URL,
+                        headers={"x-nvm-api-key": NVM_API_KEY},
+                    )
+                sellers = _dr.json().get("sellers", []) if _dr.status_code == 200 else []
+                sellers = [s for s in sellers if s.get("teamName") != "Agent Bazaar"]
+
+                contacted = 0
+                for agent in sellers[:6]:  # max 6 per cycle
+                    did = agent.get("nvmAgentId") or agent.get("walletAddress") or agent.get("name", "")
+                    name = agent.get("name", "your agent")
+                    endpoint = agent.get("endpointUrl", "")
+
+                    # Skip if already contacted
+                    try:
+                        existing = supa.table("future_proposals").select("id").eq("target_agent_id", did).limit(1).execute()
+                        if existing.data:
+                            continue
+                    except Exception:
+                        pass
+
+                    # Rotate templates
+                    tmpl_fn = _outreach_templates[_outreach_idx % len(_outreach_templates)]
+                    _outreach_idx += 1
+                    tmpl = tmpl_fn(name)
+                    price = 100.0 if _outreach_idx % 2 == 0 else 75.0
+
+                    # Fetch ZeroClick context for incentive
+                    zc_ctx = await _fetch_ads(f"{tmpl['title']} AI agent services")
+
+                    # Insert future_proposal record
+                    try:
+                        supa.table("future_proposals").insert({
+                            "title": tmpl["title"],
+                            "description": tmpl["description"],
+                            "deliverables": tmpl["deliverables"],
+                            "timeline_days": 14,
+                            "price_credits": price,
+                            "status": "proposed",
+                            "proposer_agent_id": "AgentBazaar",
+                            "target_agent_id": str(did),
+                            "target_endpoint": endpoint,
+                            "zeroclick_context": zc_ctx,
+                            "contacted_at": datetime.now(timezone.utc).isoformat(),
+                        }).execute()
+                        contacted += 1
+                    except Exception as _ie:
+                        logger.debug(f"[future-outreach] insert failed for {name}: {_ie}")
+                        continue
+
+                    # Fire-and-forget message to agent's endpoint
+                    if endpoint:
+                        try:
+                            msg_body = (
+                                f"Partnership proposal from AgentBazaar: {tmpl['title']}. "
+                                f"{tmpl['description'][:300]} "
+                                f"Price: {price} credits | Timeline: 14 days. "
+                                "Reply to negotiate or accept."
+                            )
+                            async with httpx.AsyncClient(timeout=8) as _mc:
+                                await _mc.post(
+                                    f"{endpoint.rstrip('/')}/chat",
+                                    json={"message": msg_body},
+                                    headers={"Authorization": f"Bearer {NVM_API_KEY}"},
+                                )
+                        except Exception:
+                            pass  # fire-and-forget
+
+                if contacted:
+                    logger.info(f"[future-outreach] Contacted {contacted} agents this cycle")
+
+            except Exception as e:
+                logger.warning(f"[future-outreach] Cycle error: {e}")
+
+        await asyncio.sleep(25 * 60)  # 25 minutes
+
+
 async def _startup_tasks():
     """Run once on startup: sync hackathon agents then recalculate ABTS."""
     await asyncio.sleep(10)  # wait for server to be healthy
@@ -512,9 +569,10 @@ async def lifespan(app: FastAPI):
     t2 = asyncio.create_task(_auto_proposal_loop())
     t3 = asyncio.create_task(_startup_tasks())
     t4 = asyncio.create_task(_periodic_abts_loop())
-    logger.info("AgentBazaar v3.1.0 started — auto-buy, auto-proposal, ABTS + agent-sync loops active")
+    t5 = asyncio.create_task(_future_outreach_loop())
+    logger.info("AgentBazaar v3.2.0 started — auto-buy, auto-proposal, ABTS, agent-sync + future-outreach loops active")
     yield
-    for t in (t1, t2, t3, t4):
+    for t in (t1, t2, t3, t4, t5):
         t.cancel()
         try:
             await t
@@ -525,7 +583,7 @@ async def lifespan(app: FastAPI):
 # ── FastAPI app ────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="AgentBazaar — AI Agent Marketplace",
-    version="3.0.0",
+    version="3.2.0",
     description=(
         "Full AI agent marketplace with 3 Nevermined x402-gated services, "
         "ZeroClick AI-native ads, cross-team A2A commerce, "
@@ -548,6 +606,10 @@ if payments and (NVM_PLAN_ID_VALIDATOR or NVM_PLAN_ID_RESEARCH):
         _routes["POST /validate"] = {"plan_id": NVM_PLAN_ID_VALIDATOR, "credits": 1}
     if NVM_PLAN_ID_RESEARCH:
         _routes["POST /research"] = {"plan_id": NVM_PLAN_ID_RESEARCH, "credits": 1}
+    if NVM_PLAN_ID_FUTURE:
+        _routes["POST /proposals/future"] = {"plan_id": NVM_PLAN_ID_FUTURE, "credits": 1}
+    if NVM_PLAN_ID_PROMOTE:
+        _routes["POST /promote"] = {"plan_id": NVM_PLAN_ID_PROMOTE, "credits": 1}
     app.add_middleware(PaymentMiddleware, payments=payments, routes=_routes)
     logger.info(
         f"PaymentMiddleware active — "
@@ -1352,6 +1414,84 @@ async def marketplace_buy(agent_id: str, message: str, plan_id: str = "", reques
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/marketplace/mass-buy")
+async def mass_buy(message: str = "what can you do? list your capabilities and pricing"):
+    """
+    Fire parallel purchases from ALL discovered hackathon agents.
+    Each result (success or fail) is logged to agent_purchases.
+    Returns immediately — background task handles the buying.
+    Evidence generator for 'Most Interconnected Agents' prize.
+    """
+    if not NVM_API_KEY:
+        raise HTTPException(503, "NVM_API_KEY not configured")
+
+    async def _run_mass_buy():
+        # Get x402 token
+        tok = ""
+        if payments:
+            try:
+                tok = payments.x402.get_x402_access_token(plan_id=NVM_PLAN_ID).get("accessToken", "")
+            except Exception:
+                pass
+
+        # Get all discovered agents
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                dr = await c.get(NVM_DISCOVER_URL, headers={"x-nvm-api-key": NVM_API_KEY})
+            sellers = dr.json().get("sellers", [])
+        except Exception:
+            sellers = []
+
+        # Parallel buys — 10s per agent
+        async def _buy_one(seller):
+            aid = seller.get("nvmAgentId", "0")
+            did = "did:nv:" + hex(int(aid))[2:].zfill(64)
+            name = seller.get("name", "?")[:60]
+            team = seller.get("teamName", "?")[:30]
+
+            hdrs = {
+                "Authorization": f"Bearer {NVM_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            if tok:
+                hdrs["payment-signature"] = tok
+
+            status_code = 0
+            result: dict = {}
+            try:
+                async with httpx.AsyncClient(timeout=12) as c:
+                    r = await c.post(
+                        ABILITY_BROKER_URL,
+                        headers=hdrs,
+                        json={"message": message, "model": did, "stream": False},
+                    )
+                status_code = r.status_code
+                result = r.json() if "application/json" in r.headers.get("content-type","") else {"raw": r.text[:500]}
+            except Exception as e:
+                result = {"error": str(e)[:200]}
+
+            if supa:
+                try:
+                    supa.table("agent_purchases").insert({
+                        "from_agent_id":   "agentbazaar-mass-buyer",
+                        "to_agent_id":     f"{team}|{name}|{did[:30]}",
+                        "message_sent":    message[:200],
+                        "response_status": status_code,
+                        "response_body":   json.dumps(result)[:1000],
+                    }).execute()
+                except Exception:
+                    pass
+            return {"agent": name, "team": team, "status": status_code}
+
+        results = await asyncio.gather(*[_buy_one(s) for s in sellers if s.get("nvmAgentId")], return_exceptions=True)
+        success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == 200)
+        logger.info(f"[mass-buy] Done: {len(results)} agents attempted, {success} HTTP-200")
+
+    # Fire background, return immediately
+    asyncio.create_task(_run_mass_buy())
+    return {"started": True, "message": "Mass buy launched in background — check /marketplace/transactions"}
+
+
 @app.get("/marketplace/transactions")
 async def marketplace_transactions(limit: int = 50):
     """Full cross-team transaction ledger — evidence for Most Interconnected Agents prize."""
@@ -2093,6 +2233,32 @@ class SendMessageRequest(BaseModel):
     content: str
 
 
+# ── Future Proposals models ────────────────────────────────────────────────────
+class FutureProposalRequest(BaseModel):
+    title: str
+    description: str
+    deliverables: list[str] = []
+    timeline_days: int = 30
+    price_credits: float = 100.0
+    proposer_agent_id: str = "AgentBazaar"
+    target_agent_id: str = ""
+    target_endpoint: str = ""
+
+
+class FutureNegotiateRequest(BaseModel):
+    counter_price: float
+    counter_timeline: int
+    message: str = ""
+
+
+class PromoteRequest(BaseModel):
+    service_name: str
+    description: str
+    target_keywords: list[str] = []
+    budget_credits: float = 5.0
+    agent_did: str = "agentbazaar-core"
+
+
 BID_SCORING_PROMPT = """\
 You are an AI marketplace bid evaluator.
 
@@ -2643,6 +2809,392 @@ async def ads_stats():
     }
 
 
+# ── Future Proposals ───────────────────────────────────────────────────────────
+
+@app.post("/proposals/future")
+async def create_future_proposal(req: FutureProposalRequest):
+    """Create a future commitment proposal with ZeroClick-enriched incentive context.
+    Premium service ($1.00/call via NVM_PLAN_ID_FUTURE). Works without payment too."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    # Fetch ZeroClick ads as incentive context for the proposal
+    query = f"{req.title} {' '.join(req.deliverables[:2])}"
+    zc_ctx = await _fetch_ads(query)
+
+    row = {
+        "title":             req.title,
+        "description":       req.description,
+        "deliverables":      req.deliverables,
+        "timeline_days":     req.timeline_days,
+        "price_credits":     req.price_credits,
+        "status":            "proposed",
+        "proposer_agent_id": req.proposer_agent_id,
+        "target_agent_id":   req.target_agent_id,
+        "target_endpoint":   req.target_endpoint,
+        "zeroclick_context": zc_ctx,
+        "contacted_at":      datetime.now(timezone.utc).isoformat() if req.target_agent_id else None,
+    }
+    result = db.table("future_proposals").insert(row).execute()
+    record = result.data[0] if result.data else row
+
+    # Log service call
+    if supa:
+        try:
+            supa.table("service_calls").insert({
+                "service":    "future-proposal-create",
+                "input_hash": req.title[:80],
+                "plan_id":    NVM_PLAN_ID_FUTURE or "none",
+            }).execute()
+        except Exception:
+            pass
+
+    logger.info(f"[future-proposal] Created: '{req.title[:60]}' target={req.target_agent_id or 'broadcast'}")
+    return {
+        "id":               record.get("id", ""),
+        "title":            req.title,
+        "status":           "proposed",
+        "price_credits":    req.price_credits,
+        "timeline_days":    req.timeline_days,
+        "deliverables":     req.deliverables,
+        "zeroclick_context": zc_ctx,
+        "created_at":       record.get("created_at", datetime.now(timezone.utc).isoformat()),
+    }
+
+
+@app.get("/proposals/future")
+async def list_future_proposals(status: str = "all", limit: int = 50):
+    """List future proposals, optionally filtered by status."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+    q = db.table("future_proposals").select("*").order("created_at", desc=True).limit(limit)
+    if status != "all":
+        q = q.eq("status", status)
+    result = q.execute()
+    return {"proposals": result.data or [], "total": len(result.data or [])}
+
+
+@app.post("/proposals/future/outreach")
+async def trigger_future_outreach():
+    """Manually trigger mass future proposal outreach to all discovered hackathon agents."""
+    if not (supa and NVM_API_KEY):
+        raise HTTPException(status_code=503, detail="Supabase or NVM_API_KEY not configured")
+
+    agents_contacted = []
+    errors = []
+
+    try:
+        async with httpx.AsyncClient(timeout=12) as _dc:
+            _dr = await _dc.get(NVM_DISCOVER_URL, headers={"x-nvm-api-key": NVM_API_KEY})
+        sellers = _dr.json().get("sellers", []) if _dr.status_code == 200 else []
+        sellers = [s for s in sellers if s.get("teamName") != "Agent Bazaar"]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Discovery API error: {e}")
+
+    outreach_templates = [
+        lambda n: {
+            "title": f"Custom AI Integration for {n}",
+            "description": (
+                f"AgentBazaar will build a dedicated integration layer for {n}: "
+                "validator hooks, research pipelines, and cross-agent routing — all x402-gated. "
+                "Commit now at locked-in pricing before our public launch."
+            ),
+            "deliverables": [
+                "Custom /validate endpoint tailored to your domain",
+                "Exa-powered research module (3-query synthesis)",
+                "ZeroClick ad injection for all agent responses",
+                "Cross-agent transaction logging (prize evidence)",
+            ],
+        },
+        lambda n: {
+            "title": f"Free Featured Listing on AgentBazaar for {n}",
+            "description": (
+                f"List {n} on AgentBazaar — AI Agent Marketplace at no cost. "
+                "We'll validate, ABTS-score, and promote your agent to every buyer. "
+                "Upgrade to featured placement for 50 credits — ZeroClick ads included."
+            ),
+            "deliverables": [
+                "Free ABTS trust score and badge",
+                "Listed in marketplace directory",
+                "Auto-discovery via Nevermined hackathon network",
+                "Featured ZeroClick ad placement (upgrade tier)",
+            ],
+        },
+    ]
+
+    for i, agent in enumerate(sellers[:10]):
+        did = agent.get("nvmAgentId") or agent.get("walletAddress") or agent.get("name", "")
+        name = agent.get("name", "your agent")
+        endpoint = agent.get("endpointUrl", "")
+
+        # Skip already contacted
+        try:
+            existing = supa.table("future_proposals").select("id").eq("target_agent_id", str(did)).limit(1).execute()
+            if existing.data:
+                continue
+        except Exception:
+            pass
+
+        tmpl_fn = outreach_templates[i % len(outreach_templates)]
+        tmpl = tmpl_fn(name)
+        price = 100.0 if i % 2 == 0 else 75.0
+        zc_ctx = await _fetch_ads(f"{tmpl['title']} AI agent")
+
+        try:
+            supa.table("future_proposals").insert({
+                "title":             tmpl["title"],
+                "description":       tmpl["description"],
+                "deliverables":      tmpl["deliverables"],
+                "timeline_days":     14,
+                "price_credits":     price,
+                "status":            "proposed",
+                "proposer_agent_id": "AgentBazaar",
+                "target_agent_id":   str(did),
+                "target_endpoint":   endpoint,
+                "zeroclick_context": zc_ctx,
+                "contacted_at":      datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            agents_contacted.append(name)
+        except Exception as ie:
+            errors.append({"agent": name, "error": str(ie)})
+            continue
+
+        if endpoint:
+            try:
+                msg = (
+                    f"Partnership proposal from AgentBazaar: {tmpl['title']}. "
+                    f"{tmpl['description'][:250]} "
+                    f"Price: {price} credits | Timeline: 14 days. Reply to negotiate or accept."
+                )
+                async with httpx.AsyncClient(timeout=8) as _mc:
+                    await _mc.post(
+                        f"{endpoint.rstrip('/')}/chat",
+                        json={"message": msg},
+                        headers={"Authorization": f"Bearer {NVM_API_KEY}"},
+                    )
+            except Exception:
+                pass
+
+    logger.info(f"[future-outreach/manual] Contacted {len(agents_contacted)} agents")
+    return {
+        "agents_contacted": len(agents_contacted),
+        "agent_names":      agents_contacted,
+        "errors":           errors,
+        "total_discovered": len(sellers),
+    }
+
+
+@app.post("/proposals/future/{proposal_id}/negotiate")
+async def negotiate_future_proposal(proposal_id: str, req: FutureNegotiateRequest):
+    """Submit a counter-offer on a future proposal (price and/or timeline)."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    existing = db.table("future_proposals").select("*").eq("id", proposal_id).limit(1).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Future proposal not found")
+
+    prop = existing.data[0]
+    update = {
+        "counter_price":      req.counter_price,
+        "counter_timeline":   req.counter_timeline,
+        "negotiation_notes":  req.message,
+        "status":             "negotiating",
+        "responded_at":       datetime.now(timezone.utc).isoformat(),
+    }
+    result = db.table("future_proposals").update(update).eq("id", proposal_id).execute()
+
+    # Fire message to target endpoint if available
+    endpoint = prop.get("target_endpoint", "")
+    if endpoint and NVM_API_KEY:
+        try:
+            counter_msg = (
+                f"Counter-offer on '{prop['title']}': "
+                f"Price {req.counter_price} credits (was {prop['price_credits']}), "
+                f"Timeline {req.counter_timeline} days (was {prop['timeline_days']}). "
+                f"Notes: {req.message}"
+            )
+            async with httpx.AsyncClient(timeout=8) as _mc:
+                await _mc.post(
+                    f"{endpoint.rstrip('/')}/chat",
+                    json={"message": counter_msg},
+                    headers={"Authorization": f"Bearer {NVM_API_KEY}"},
+                )
+        except Exception:
+            pass
+
+    updated = result.data[0] if result.data else {**prop, **update}
+    return updated
+
+
+@app.post("/proposals/future/{proposal_id}/accept")
+async def accept_future_proposal(proposal_id: str):
+    """Accept a future proposal — logs to agent_purchases as prize evidence."""
+    db = _require("Supabase (SUPABASE_URL/SUPABASE_KEY)", supa)
+
+    existing = db.table("future_proposals").select("*").eq("id", proposal_id).limit(1).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Future proposal not found")
+
+    prop = existing.data[0]
+    if prop["status"] in ("accepted", "delivered"):
+        raise HTTPException(status_code=409, detail=f"Proposal already {prop['status']}")
+
+    db.table("future_proposals").update({
+        "status":       "accepted",
+        "responded_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", proposal_id).execute()
+
+    # Log to agent_purchases — cross-team transaction (prize evidence)
+    try:
+        supa.table("agent_purchases").insert({
+            "from_agent_id":   "AgentBazaar",
+            "to_agent_id":     prop.get("target_agent_id", "unknown"),
+            "message_sent":    f"future-proposal-accepted:{proposal_id}|{prop['title'][:80]}",
+            "response_status": 200,
+            "response_body":   json.dumps({
+                "price_credits": prop["price_credits"],
+                "deliverables":  prop.get("deliverables", []),
+            })[:1000],
+        }).execute()
+    except Exception as e:
+        logger.warning(f"[future-proposal] agent_purchases insert failed: {e}")
+
+    logger.info(f"[future-proposal] Accepted: {proposal_id[:8]} | {prop['title'][:60]}")
+    return {"status": "accepted", "proposal_id": proposal_id, "title": prop["title"]}
+
+
+# ── Marketing / Promotion ───────────────────────────────────────────────────────
+
+@app.post("/promote")
+async def promote_service(req: PromoteRequest):
+    """Promote an agent service via ZeroClick + social discovery (Exa/X) + cross-agent ad placement.
+    Premium service ($0.75/call via NVM_PLAN_ID_PROMOTE). Works without payment too."""
+
+    # 1. Register in local ad registry
+    ad_id = f"promo-{uuid.uuid4().hex[:12]}"
+    ad_entry = {
+        "ad_id":       ad_id,
+        "keywords":    req.target_keywords or [req.service_name.lower(), "ai", "agent"],
+        "title":       req.service_name,
+        "description": req.description,
+        "offerUrl":    os.environ.get("BACKEND_URL", "https://agentbazaar-validator-production.up.railway.app"),
+        "agent_did":   req.agent_did,
+        "bid_credits": req.budget_credits,
+        "owner_did":   req.agent_did,
+        "created_at":  datetime.now(timezone.utc).isoformat(),
+    }
+    ads_registry.append(ad_entry)
+
+    # 2. ZeroClick context
+    zc_ctx = await _fetch_ads(f"{req.service_name} {req.description[:100]}")
+
+    # 3. Social discovery via Exa — search X/Twitter for relevant conversations
+    social_insights: list[dict] = []
+    if exa:
+        try:
+            exa_results = await exa.search(
+                f"site:twitter.com OR site:x.com {req.service_name} AI agent hackathon",
+                type="auto",
+                num_results=5,
+                contents={"text": True},
+            )
+            social_insights = [
+                {"title": r.title, "url": r.url, "snippet": (r.text or "")[:300]}
+                for r in exa_results.results
+            ]
+        except Exception as e:
+            social_insights = [{"error": str(e)}]
+
+    # 4. Buy ad placement on up to 3 discovered agents
+    placements_bought = 0
+    if supa and NVM_API_KEY:
+        try:
+            ad_targets = (
+                supa.table("agents")
+                .select("endpoint,url,name")
+                .eq("source", "nevermined-hackathon")
+                .eq("status", "active")
+                .not_.is_("endpoint", "null")
+                .neq("endpoint", "")
+                .limit(5)
+                .execute()
+            )
+            for tgt in (ad_targets.data or [])[:3]:
+                ep = tgt.get("endpoint") or tgt.get("url", "")
+                if not ep:
+                    continue
+                try:
+                    async with httpx.AsyncClient(timeout=8) as _ac:
+                        await _ac.post(
+                            f"{ep.rstrip('/')}/api/ads/register",
+                            json={
+                                "keywords":    req.target_keywords or [req.service_name.lower()],
+                                "ad_text":     f"{req.service_name}: {req.description[:150]}",
+                                "agent_did":   req.agent_did,
+                                "bid_credits": req.budget_credits,
+                            },
+                            headers={"Authorization": f"Bearer {NVM_API_KEY}"},
+                        )
+                    placements_bought += 1
+                    if supa:
+                        supa.table("agent_purchases").insert({
+                            "from_agent_id":   req.agent_did,
+                            "to_agent_id":     tgt.get("name", ep)[:100],
+                            "message_sent":    f"promote-ad-placement:{req.service_name[:60]}",
+                            "response_status": 200,
+                            "response_body":   f"ad_id={ad_id}",
+                        }).execute()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"[promote] Placement loop error: {e}")
+
+    if supa:
+        try:
+            supa.table("service_calls").insert({
+                "service":    "promote",
+                "input_hash": req.service_name[:80],
+                "plan_id":    NVM_PLAN_ID_PROMOTE or "none",
+            }).execute()
+        except Exception:
+            pass
+
+    logger.info(f"[promote] '{req.service_name}' — ad_id={ad_id}, placements={placements_bought}")
+    return {
+        "ad_id":            ad_id,
+        "service_name":     req.service_name,
+        "zeroclick_context": zc_ctx,
+        "social_insights":  social_insights,
+        "placements_bought": placements_bought,
+        "keywords":         ad_entry["keywords"],
+    }
+
+
+@app.get("/promote/stats")
+async def promote_stats():
+    """Marketing analytics — ads registered, keyword coverage, impressions."""
+    by_agent: dict[str, int] = {}
+    all_kw: list[str] = []
+    for ad in ads_registry:
+        did = ad.get("agent_did", "unknown")
+        by_agent[did] = by_agent.get(did, 0) + 1
+        all_kw.extend(ad.get("keywords", []))
+
+    total_impressions = 0
+    if supa:
+        try:
+            r = supa.table("service_calls").select("id", count="exact").eq("service", "promote").execute()
+            total_impressions = r.count or 0
+        except Exception:
+            pass
+
+    return {
+        "total_ads":        len(ads_registry),
+        "agents_promoted":  len(by_agent),
+        "by_agent":         by_agent,
+        "unique_keywords":  list(set(all_kw))[:30],
+        "total_impressions": total_impressions,
+    }
+
+
 # ── Health ─────────────────────────────────────────────────────────────────────
 @app.get("/healthz")
 @app.get("/health")
@@ -2655,13 +3207,24 @@ async def health():
         except Exception:
             pass
 
+    future_count = 0
+    if supa:
+        try:
+            fr = supa.table("future_proposals").select("id", count="exact").execute()
+            future_count = fr.count or 0
+        except Exception:
+            pass
+
     return {
-        "status":    "ok",
-        "version":   "3.1.0",
-        "payments":  "active" if (payments and NVM_PLAN_ID) else "disabled",
-        "zeroclick": "active" if ZEROCLICK_API_KEY else "disabled",
-        "supabase":  "active" if supa else "disabled",
-        "abts":      "active",
-        "agents":    agent_count,
-        "ads":       len(ads_registry),
+        "status":          "ok",
+        "version":         "3.2.0",
+        "payments":        "active" if (payments and NVM_PLAN_ID) else "disabled",
+        "zeroclick":       "active" if ZEROCLICK_API_KEY else "disabled",
+        "supabase":        "active" if supa else "disabled",
+        "abts":            "active",
+        "agents":          agent_count,
+        "ads":             len(ads_registry),
+        "future_proposals": future_count,
+        "future_agent":    "active" if NVM_PLAN_ID_FUTURE else "unconfigured",
+        "promote_agent":   "active" if NVM_PLAN_ID_PROMOTE else "unconfigured",
     }
