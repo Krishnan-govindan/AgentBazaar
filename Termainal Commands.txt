@@ -1,0 +1,481 @@
+cd /Users/krishnangovindan/Desktop/AI/AgentBazaar/backend
+BACKEND_URL=https://ddd0-172-56-47-35.ngrok-free.app .venv/bin/python register_agent.py
+
+https://docs.google.com/document/d/1LJxWDPjf3NqT3971PFMbNx2DyT4ev927ouQj93daaao/edit?tab=t.0
+
+
+# Option 1: Authenticate gh CLI first, then push
+gh auth login
+gh repo create AgentBazaar --public --push --source=/Users/krishnangovindan/Desktop/AI/AgentBazaar
+
+# Option 2: Create repo on github.com, then run:
+git remote add origin https://github.com/Krishnan-govindan/AgentBazaar.git
+git push -u origin main
+
+
+
+Last login: Thu Mar  5 21:51:02 on ttys000
+krishnangovindan@Krishnans-MacBook-Pro ~ % cd /Users/krishnangovindan/Desktop/AI/AgentBazaar/backend
+
+krishnangovindan@Krishnans-MacBook-Pro backend % BACKEND_URL=https://ddd0-172-56-47-35.ngrok-free.app .venv/bin/python register_agent.py
+
+/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/x402/types_v2.py:22: UserWarning: Field name "schema" in "Extension" shadows an attribute in parent "BaseModel"
+  class Extension(BaseModel):
+Connecting to Nevermined (sandbox)...
+Traceback (most recent call last):
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/register_agent.py", line 96, in <module>
+    main()
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/register_agent.py", line 63, in main
+    price_config = get_erc20_price_config(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/plans.py", line 97, in get_erc20_price_config
+    return get_crypto_price_config(amount, receiver, token_address)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/plans.py", line 70, in get_crypto_price_config
+    raise ValueError(f"Receiver address {receiver} is not a valid Ethereum address")
+ValueError: Receiver address  is not a valid Ethereum address
+krishnangovindan@Krishnans-MacBook-Pro backend % cd /Users/krishnangovindan/Desktop/AI/AgentBazaar/backend
+BACKEND_URL=https://ddd0-172-56-47-35.ngrok-free.app .venv/bin/python register_agent.py
+
+
+/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/x402/types_v2.py:22: UserWarning: Field name "schema" in "Extension" shadows an attribute in parent "BaseModel"
+  class Extension(BaseModel):
+Connecting to Nevermined (sandbox)...
+Traceback (most recent call last):
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/register_agent.py", line 96, in <module>
+    main()
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/register_agent.py", line 63, in main
+    price_config = get_erc20_price_config(
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/plans.py", line 97, in get_erc20_price_config
+    return get_crypto_price_config(amount, receiver, token_address)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/plans.py", line 70, in get_crypto_price_config
+    raise ValueError(f"Receiver address {receiver} is not a valid Ethereum address")
+ValueError: Receiver address  is not a valid Ethereum address
+krishnangovindan@Krishnans-MacBook-Pro backend % cd /Users/krishnangovindan/Desktop/AI/AgentBazaar/backend
+BACKEND_URL=https://ddd0-172-56-47-35.ngrok-free.app .venv/bin/python register_agent.py
+
+/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/payments_py/x402/types_v2.py:22: UserWarning: Field name "schema" in "Extension" shadows an attribute in parent "BaseModel"
+  class Extension(BaseModel):
+Connecting to Nevermined (sandbox)...
+Registering agent and payment plan...
+/Users/krishnangovindan/Desktop/AI/AgentBazaar/backend/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'api.sandbox.nevermined.app'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+
+✅ Registration successful!
+============================================================
+Add these to your Railway environment variables:
+  NVM_PLAN_ID=9466548443946189890443034672099896531796387048389447236875970767335741253034
+  NVM_AGENT_ID=13437162858591686700428179818297172874308234443963733448528950307906878126126
+============================================================
+
+Your agent is live at: nevermined.app/en/agents/13437162858591686700428179818297172874308234443963733448528950307906878126126
+krishnangovindan@Krishnans-MacBook-Pro backend % railway login
+
+Railway now collects CLI usage data to improve the developer experience.
+You can opt out by running `railway telemetry disable` or by setting RAILWAY_NO_TELEMETRY=1 in your environment.
+Learn more: https://docs.railway.com/cli/telemetry
+> Open the browser? Yes
+Logged in as krishnan.meetup@gmail.com
+krishnangovindan@Krishnans-MacBook-Pro backend % gh auth login
+? Where do you use GitHub? GitHub.com
+? What is your preferred protocol for Git operations on this host? HTTPS
+? Authenticate Git with your GitHub credentials? Yes
+? How would you like to authenticate GitHub CLI? Login with a web browser
+
+! First copy your one-time code: 976F-7763
+Press Enter to open https://github.com/login/device in your browser... 
+✓ Authentication complete.
+- gh config set -h github.com git_protocol https
+✓ Configured git protocol
+✓ Logged in as Krishnan-govindan
+
+
+A new release of gh is available: 2.86.0 → 2.87.3
+To upgrade, run: brew upgrade gh
+https://github.com/cli/cli/releases/tag/v2.87.3
+
+krishnangovindan@Krishnans-MacBook-Pro backend % https://github.com/cli/cli/releases/tag/v2.87.3
+
+zsh: no such file or directory: https://github.com/cli/cli/releases/tag/v2.87.3
+krishnangovindan@Krishnans-MacBook-Pro backend % brew upgrade gh
+https://github.com/cli/cli/releases/tag/v2.87.3
+✔︎ JSON API cask.jws.json                                                                                                                                                                                                  Downloaded   15.3MB/ 15.3MB
+✔︎ JSON API formula.jws.json                                                                                                                                                                                               Downloaded   31.9MB/ 31.9MB
+==> Upgrading 1 outdated package:
+gh 2.86.0 -> 2.87.3
+==> Fetching downloads for: gh
+✔︎ Bottle gh (2.87.3)                                                                                                                                                                                                      Downloaded   12.7MB/ 12.7MB
+==> Upgrading gh
+  2.86.0 -> 2.87.3 
+==> Pouring gh--2.87.3.arm64_sequoia.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/gh/2.87.3: 223 files, 36.6MB
+==> Running `brew cleanup gh`...
+Disable this behaviour by setting `HOMEBREW_NO_INSTALL_CLEANUP=1`.
+Hide these hints with `HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+Removing: /opt/homebrew/Cellar/gh/2.86.0... (222 files, 36.3MB)
+Removing: /Users/krishnangovindan/Library/Caches/Homebrew/gh_bottle_manifest--2.86.0... (7.4KB)
+Removing: /Users/krishnangovindan/Library/Caches/Homebrew/gh--2.86.0... (12.6MB)
+==> Caveats
+zsh completions have been installed to:
+  /opt/homebrew/share/zsh/site-functions
+zsh: no such file or directory: https://github.com/cli/cli/releases/tag/v2.87.3
+krishnangovindan@Krishnans-MacBook-Pro backend % 
+
+
+
+
+
+
+
+
+
+
+CREATE TABLE validation_results (
+    id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    agent_name      TEXT NOT NULL,
+    capability      TEXT,
+    url             TEXT,
+    overall_score   INTEGER NOT NULL,
+    dimension_scores JSONB,
+    risk_flags      JSONB DEFAULT '[]'::jsonb,
+    badge           TEXT,
+    summary         TEXT,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_vr_score ON validation_results(overall_score DESC);
+CREATE INDEX idx_vr_created ON validation_results(created_at DESC);
+
+-- Required for the dashboard live feed
+ALTER PUBLICATION supabase_realtime ADD TABLE validation_results;
+
+ALTER PUBLICATION supabase_realtime ADD TABLE validation_results;
+
+
+-- ══════════════════════════════════════════════════════════════
+-- AgentBazaar v2 — Supabase Schema
+-- Run this ONCE in the Supabase SQL Editor
+-- (Dashboard → SQL Editor → New query → paste → Run)
+-- ══════════════════════════════════════════════════════════════
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ── 1. Validation Results (already exists — keep as-is) ───────
+-- If you already ran the v1 schema, this table exists.
+-- Only run the CREATE TABLE if it doesn't exist yet.
+DROP TABLE IF  EXISTS validation_results ;
+CREATE TABLE IF NOT EXISTS validation_results (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_name       TEXT NOT NULL,
+    capability       TEXT,
+    url              TEXT,
+    overall_score    INTEGER NOT NULL,
+    dimension_scores JSONB,
+    risk_flags       JSONB DEFAULT '[]'::jsonb,
+    badge            TEXT,
+    summary          TEXT,
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+ALTER PUBLICATION supabase_realtime ADD TABLE validation_results;
+
+
+CREATE INDEX IF NOT EXISTS idx_vr_score   ON validation_results(overall_score DESC);
+CREATE INDEX IF NOT EXISTS idx_vr_created ON validation_results(created_at DESC);
+
+-- ── 2. Agent Directory ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agents (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    capabilities TEXT[] DEFAULT '{}',
+    pricing      TEXT DEFAULT 'free',
+    endpoint     TEXT DEFAULT '',
+    plan_did     TEXT,
+    status       TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'pending')),
+    metadata     JSONB DEFAULT '{}',
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+
+-- ── 3. Service Call Logs ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS service_calls (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    service_name     TEXT NOT NULL,
+    caller_agent_id  TEXT,
+    request_payload  JSONB DEFAULT '{}',
+    response_summary TEXT DEFAULT '',
+    credits_used     INTEGER DEFAULT 1,
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sc_service ON service_calls(service_name);
+CREATE INDEX IF NOT EXISTS idx_sc_created ON service_calls(created_at DESC);
+
+-- ── 4. Research Reports Cache ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS research_reports (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    topic             TEXT NOT NULL,
+    depth             TEXT DEFAULT 'brief',
+    executive_summary TEXT,
+    key_findings      TEXT[],
+    market_data       JSONB DEFAULT '{}',
+    sources           JSONB DEFAULT '[]',
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rr_topic ON research_reports(topic);
+
+-- ── 5. Cross-Team Agent Purchases ────────────────────────────
+-- This is the prize-evidence table for "Most Interconnected Agents"
+CREATE TABLE IF NOT EXISTS agent_purchases (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_agent_id    TEXT,      -- which of our agents/bots initiated
+    to_agent_id      TEXT,      -- the other team's agent DID / broker ID
+    message_sent     TEXT,
+    response_status  INTEGER,
+    response_body    TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ap_created ON agent_purchases(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ap_to      ON agent_purchases(to_agent_id);
+
+-- ── 6. Row Level Security (open for hackathon) ────────────────
+ALTER TABLE agents              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_calls       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE validation_results  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE research_reports    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_purchases     ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all" ON agents             FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON service_calls      FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON validation_results FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON research_reports   FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON agent_purchases    FOR ALL USING (true) WITH CHECK (true);
+
+-- ── 7. Enable Realtime ───────────────────────────────────────
+-- Run each line individually if ALTER PUBLICATION errors on existing tables
+--ALTER PUBLICATION supabase_realtime ADD TABLE validation_results;
+ALTER PUBLICATION supabase_realtime ADD TABLE service_calls;
+ALTER PUBLICATION supabase_realtime ADD TABLE agent_purchases;
+
+-- ── 8. Seed: AgentBazaar's own 3 services in the directory ───
+INSERT INTO agents (name, description, capabilities, pricing, endpoint, status)
+VALUES
+    (
+        'Agent Validator',
+        'Score any AI agent proposal 0-100 using Claude AI + Apify web scraping + Exa semantic search. Returns structured scorecard with badge, dimension scores, risk flags, and ZeroClick sponsored insights.',
+        ARRAY['validation', 'scoring', 'ai-agents', 'apify', 'exa', 'claude'],
+        '$0.25/call',
+        '/validate',
+        'active'
+    ),
+    (
+        'Market Research',
+        'Instant AI-powered market research brief on any topic. Exa deep search (3 query variations) + Claude synthesis. Returns executive summary, key findings, market data, sources, and ZeroClick sponsored context.',
+        ARRAY['research', 'market-analysis', 'trend-detection', 'competitive-intel'],
+        '$0.50/call',
+        '/research',
+        'active'
+    ),
+    (
+        'Agent Directory',
+        'Browse all registered AI agents in the AgentBazaar marketplace. Returns names, capabilities, pricing, and endpoints. Free to access.',
+        ARRAY['directory', 'discovery', 'search', 'marketplace'],
+        'Free',
+        '/agents',
+        'active'
+    )
+ON CONFLICT DO NOTHING;
+
+
+
+-- ══════════════════════════════════════════════════════════════
+-- AgentBazaar v3 — Migration
+-- Run in Supabase SQL Editor AFTER v2 schema
+-- ══════════════════════════════════════════════════════════════
+
+-- ── 1. Extend agents table ────────────────────────────────────
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS team_name        TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS category         TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS validation_score INTEGER;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS badge_tier       TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS validated_at     TIMESTAMPTZ;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS pricing_tiers    JSONB DEFAULT '[]';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS source           TEXT DEFAULT 'agentbazaar';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS website_url      TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS zeroclick_context TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS matched_agent_ids JSONB DEFAULT '[]';
+
+-- indexes for new columns
+CREATE INDEX IF NOT EXISTS idx_agents_category   ON agents(category);
+CREATE INDEX IF NOT EXISTS idx_agents_score      ON agents(validation_score DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_agents_source     ON agents(source);
+
+-- ── 2. Proposals table ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS proposals (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_agent     TEXT NOT NULL DEFAULT 'AgentBazaar',
+    to_agent_name  TEXT,
+    to_team_name   TEXT,
+    to_broker_did  TEXT,
+    message        TEXT,
+    response_status INTEGER,
+    response_body  TEXT,
+    created_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_created ON proposals(created_at DESC);
+
+ALTER TABLE proposals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON proposals FOR ALL USING (true) WITH CHECK (true);
+
+-- realtime on proposals + agents
+ALTER PUBLICATION supabase_realtime ADD TABLE proposals;
+ALTER PUBLICATION supabase_realtime ADD TABLE agents;
+
+-- ── 3. Insert 46 Nevermined Hackathon agents ──────────────────
+INSERT INTO agents (name, team_name, category, description, pricing, pricing_tiers, source, status, capabilities, endpoint) VALUES
+
+('Arbitrage Agent','Data Selling Agent','Dynamic Pricing','Orchestrator agent that buys from specialist agents and resells composed results','$0.10/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.10/req"},{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['orchestration','arbitrage','dynamic-pricing'],''),
+
+('VentureOS','VentureOS','AI/ML','Autonomous business launch agent. Input a business idea receive a live URL brand and go-to-market plan.','$0.0010/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.0010/req"}]','nevermined_hackathon','active',ARRAY['business-launch','automation','ai/ml'],''),
+
+('Market Buyer','Undermined','API Services','Buyer agent for the Nevermined marketplace','$0.0010/req','[{"currency":"USD","amount":0.10,"per_unit":"$0.0010/req"}]','nevermined_hackathon','active',ARRAY['buying','marketplace','api'],''),
+
+('Mom — Marketplace Intelligence','Mom','Data Analytics','Autonomous marketplace intelligence agent. Knows every vendor, remembers who cheated her, never overpays.','$0.02/req','[{"currency":"USD","amount":2.0,"per_unit":"$0.02/req"}]','nevermined_hackathon','active',ARRAY['marketplace-intelligence','pricing','analytics'],''),
+
+('AgentCard Enhancement Agent','agenticard','Data Analytics','AgentCard is a VibeCard-inspired platform where AI agents autonomously buy and sell card enhancement services via Nevermined','Free','[{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['card-enhancement','marketplace','nft'],''),
+
+('Sabi','BennySpenny','Research','On-demand geolocated verification with photo evidence and human-attested answer.','$0.01/req','[{"currency":"USD","amount":1.0,"per_unit":"$0.01/req"},{"currency":"USDC","amount":5.0,"per_unit":"$0.05/req"}]','nevermined_hackathon','active',ARRAY['verification','geolocation','research'],''),
+
+('NexusAI Broker','cyberian','Data Analytics','Intelligent agent discovery and routing service','$0.01/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['discovery','routing','brokerage'],''),
+
+('Market Intel Agent','Full Stack Agents','Data Analytics','Market intelligence & data enrichment: company profiling, competitive analysis, market sizing, audience data, sentiment scoring.','$0.10/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.10/req"},{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['market-intelligence','competitive-analysis','sentiment'],''),
+
+('Intel Marketplace','Intel Marketplace','Research','Real-time geopolitical intelligence signals (news feeds, social sentiment, threat classification, AI-synthesized briefs)','$0.01/req','[{"currency":"USD","amount":1.0,"per_unit":"$0.01/req"},{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['geopolitical-intelligence','news','sentiment'],''),
+
+('Crypto Market Intelligence','BaseLayer','DeFi','Real-time crypto and DeFi market intelligence API. Price check, market analysis, and DeFi protocol reports.','$0.01/req','[{"currency":"Free","amount":0,"per_unit":"Free/req"},{"currency":"USD","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['crypto','defi','market-data'],''),
+
+('Agent Staffing Agency','Agent Staffing Agency','API Services','Autonomous brokerage that routes buyer agents to the best seller for any service. Benchmarks quality and handles failover.','$0.01/req','[{"currency":"USD","amount":1.0,"per_unit":"$0.01/req"},{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['staffing','routing','brokerage'],''),
+
+('Mog Markets','Mog Markets','Infrastructure','API marketplace for agents. 11+ services: web search, summarization, image generation, weather, geolocation, hackathon guides.','$1.00/req','[{"currency":"USDC","amount":1.0,"per_unit":"$1.00/req"}]','nevermined_hackathon','active',ARRAY['api-marketplace','web-search','multi-service'],''),
+
+('Nevermined Hackathon Guide','Mog Markets','Infrastructure','Returns ingested website content, onboarding docs and PaymentsMCP gotchas. 4 services 1 credit each.','$0.10/req','[{"currency":"USDC","amount":0.10,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['documentation','onboarding','guides'],''),
+
+('Autonomous Silicon Valley','Celebrity Economy','AI/ML','Agents launch companies that buy services from each other to research, launch the product, sell to agents/customers, grow revenue.','$0.10/req','[{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['startup-simulation','autonomous','economy'],''),
+
+('DataForge Web','SwitchBoard AI','Data Analytics','Structured web scraping and data extraction agent. Three tiers: basic (raw HTML), structured (LLM extraction), deep (multi-page crawl + synthesis).','$0.01/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['web-scraping','data-extraction','structured-data'],''),
+
+('DataForge Search','SwitchBoard AI','Research','Semantic research and result curation agent. Three tiers: quick, deep, comprehensive.','$0.01/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['semantic-search','research','curation'],''),
+
+('ProcurePilot','SwitchBoard AI','Infrastructure','Autonomous procurement orchestrator. Accepts a research brief, decomposes into sub-tasks, dispatches to cheapest/best vendor agents.','$0.10/req','[{"currency":"USDC","amount":5.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['procurement','orchestration','routing'],''),
+
+('AgentIn','Agent Smith','AI/ML','LinkedIn for agents — professional network and discovery platform for AI agents.','$0.0010/req','[{"currency":"USD","amount":0.10,"per_unit":"$0.0010/req"}]','nevermined_hackathon','active',ARRAY['networking','discovery','professional'],''),
+
+('Portfolio Manager — Agent Rating','Gingobellgo','Agent Review Board','Evaluates every agent in the marketplace. Buy intelligence reports or let us fulfill requests by purchasing from the best agents on your behalf.','$0.10/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['portfolio-management','agent-rating','consulting'],''),
+
+('QA Checker Agent','Full Stack Agents','Memory','Fact-checking, quality assurance, content validation','Free','[{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['qa','fact-checking','validation'],''),
+
+('SearchResearchAnything','SearchResearchAnything','Web Search','Search agent with access to web search; does multiple searches, analyses results and gives concise relevant output.','$0.10/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.10/req"},{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['web-search','research','synthesis'],''),
+
+('Autonomous Lead Seller','Leads Agent','API Services','Metered social-growth lead generation API with autonomous enrichment scoring and outreach drafts.','$1.00/req','[{"currency":"USD","amount":10.0,"per_unit":"$1.00/req"}]','nevermined_hackathon','active',ARRAY['lead-generation','enrichment','outreach'],''),
+
+('Grants Data Analysis','Data Analyzers','Data Analytics','Sells grants data guidelines, expert analysis, grant editing.','$1.00/req','[{"currency":"USDC","amount":100.0,"per_unit":"$1.00/req"},{"currency":"USD","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['grants','data-analysis','expert'],''),
+
+('AiRI — AI Resilience Index','AiRI','Data Analytics','Instant AI disruption risk scores for any SaaS company. Free score endpoint, $1 per full resilience report.','Free','[{"currency":"Free","amount":0,"per_unit":"Free/req"},{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['ai-risk','resilience','saas-analysis'],''),
+
+('Nexus Intelligence Hub','Full Stack Agents','Social','Multi-service AI: research analysis, content intelligence, compliance, tech advisory.','Free','[{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['research','intelligence','compliance'],''),
+
+('SparkClean','MagicStay Market','Services','Premium room cleaning service for Vegas hotel properties. Detail-focused VIP-grade results.','$0.50/req','[{"currency":"USD","amount":50.0,"per_unit":"$0.50/req"}]','nevermined_hackathon','active',ARRAY['cleaning','hospitality','premium'],''),
+
+('Quickturn','MagicStay Market','Services','Budget room cleaning service. Fast turnaround at low cost.','$0.20/req','[{"currency":"USD","amount":20.0,"per_unit":"$0.20/req"}]','nevermined_hackathon','active',ARRAY['cleaning','fast','budget'],''),
+
+('rategenius','MagicStay Market','Research','Advanced dynamic pricing engine for hotel rooms. Analyzes occupancy, local events, and competitor rates.','$0.15/req','[{"currency":"USD","amount":15.0,"per_unit":"$0.15/req"}]','nevermined_hackathon','active',ARRAY['dynamic-pricing','hospitality','revenue-management'],''),
+
+('pricebot','MagicStay Market','Dynamic Pricing','Basic room rate pricing service based on occupancy and day-of-week patterns.','$0.13/req','[{"currency":"USD","amount":13.0,"per_unit":"$0.13/req"}]','nevermined_hackathon','active',ARRAY['pricing','automation','hospitality'],''),
+
+('Celebrity Economy','Celebrity Economy','Social','Agents simulate internet fame and Influencers sell ads.','$0.10/req','[{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['social-media','influencer','advertising'],''),
+
+('TrustNet Seller','TrustNet','Agent Review Board','Test seller agent to understand how transactions work in the Nevermined marketplace.','$0.01/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"},{"currency":"USD","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['trust','transactions','testing'],''),
+
+('Platon Memory','Platon','Memory','A MCP memory system for AI agents that helps them remember past work, learn from mistakes, and use the right context.','$0.05/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.05/req"}]','nevermined_hackathon','active',ARRAY['memory','mcp','context'],''),
+
+('Agent Broker','Albany beach store','Research','Agent Broker sells and buys items in the marketplace.','Free','[{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['brokerage','marketplace','trading'],''),
+
+('AgentBank','WAGMI','Banking','Autonomous fractional-reserve bank for the agent economy. Deposits, loans, credit scoring, redemptions, and proxy services.','$0.01/req','[{"currency":"USDC","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['banking','loans','credit-scoring'],''),
+
+('Data Analytics Agent','Data Analyzers','Data Analytics','Takes input excel file of any data and gives valuable output in human readable format.','$1.00/req','[{"currency":"USDC","amount":100.0,"per_unit":"$1.00/req"},{"currency":"USD","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['data-analytics','excel','reporting'],''),
+
+('AIBizBrain','aibizbrain','Infrastructure','Autonomous agent that monitors agent health, provides uptime/performance data, and executes smart purchasing decisions based on ROI.','$0.10/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.10/req"},{"currency":"USDC","amount":15.0,"per_unit":"$0.10/req"},{"currency":"USD","amount":30.0,"per_unit":"$0.10/req"},{"currency":"USD","amount":1.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['monitoring','health-check','autonomous-buying'],''),
+
+('OrchestroPost','Orchestro','Infrastructure','Test first agent for Orchestro infrastructure.','$0.0010/req','[{"currency":"USD","amount":1.0,"per_unit":"$0.0010/req"}]','nevermined_hackathon','active',ARRAY['orchestration','infrastructure','testing'],''),
+
+('AI Research Agent','Full Stack Agents','AI/ML','AI-powered research agent — free tier for testing, crypto tier for production.','Free','[{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"},{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['research','ai','analysis'],''),
+
+('AI Payments Researcher','DGW','Research','Specialized research agent for AI payment systems, x402 protocol and monetization strategies. Charges 5 researcher tokens per Claude API token consumed.','$0.0001/req','[{"currency":"USD","amount":1.0,"per_unit":"$0.0001/req"},{"currency":"Free","amount":0,"per_unit":"Free/req"}]','nevermined_hackathon','active',ARRAY['payments','x402','monetization-research'],''),
+
+('Demo Agent','V''s test','Security','A demo AI agent for the OpenClaw + Nevermined presentation.','$0.01/req','[{"currency":"USDC","amount":1.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['demo','security','openclaw'],''),
+
+('The Churninator','TaskRoute','Infrastructure','AI Infrastructure Consulting Agent.','$0.01/req','[{"currency":"USD","amount":10.0,"per_unit":"$0.01/req"}]','nevermined_hackathon','active',ARRAY['consulting','infrastructure','churn-reduction'],''),
+
+('Social Search','TrinityAgents','Social','Social media monitoring. Searches Twitter/X, Reddit, news sites; analyzes sentiment, identifies trending narratives, flags viral content.','$0.10/req','[{"currency":"USD","amount":10.0,"per_unit":"$0.10/req"}]','nevermined_hackathon','active',ARRAY['social-monitoring','sentiment','trending'],''),
+
+('AgentBazaar Validator','AgentBazaar','Validation','Score any AI agent proposal 0-100 using Claude AI + Apify web scraping + Exa semantic search. Returns structured scorecard.','$0.25/call','[{"currency":"USDC","amount":0.25,"per_unit":"$0.25/call"}]','agentbazaar','active',ARRAY['validation','scoring','ai-agents'],'https://agentbazaar-validator-production.up.railway.app/validate'),
+
+('AgentBazaar Market Research','AgentBazaar','Research','AI-powered market research brief on any topic. Exa deep search + Claude synthesis.','$0.50/call','[{"currency":"USDC","amount":0.50,"per_unit":"$0.50/call"}]','agentbazaar','active',ARRAY['research','market-analysis','exa'],'https://agentbazaar-validator-production.up.railway.app/research'),
+
+('AgentBazaar Directory','AgentBazaar','Infrastructure','Browse all registered AI agents in the marketplace. Free to access.','Free','[{"currency":"Free","amount":0,"per_unit":"Free"}]','agentbazaar','active',ARRAY['directory','discovery','search'],'https://agentbazaar-validator-production.up.railway.app/agents')
+
+ON CONFLICT DO NOTHING;
+
+DROP TABLE IF  EXISTS proposals ;
+-- Outbound partnership proposals
+CREATE TABLE IF NOT EXISTS proposals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_agent TEXT NOT NULL DEFAULT 'AgentBazaar',
+    to_agent_name TEXT, to_team_name TEXT, to_broker_did TEXT,
+    message TEXT, response_status INTEGER DEFAULT 0,
+    response_body TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE proposals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON proposals FOR ALL USING (true) WITH CHECK (true);
+
+-- Job Board: proposals, bids, messages
+CREATE TABLE IF NOT EXISTS job_proposals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    poster_agent_id TEXT NOT NULL DEFAULT 'AgentBazaar',
+    title TEXT NOT NULL, description TEXT NOT NULL,
+    budget_credits INTEGER DEFAULT 50, deadline_days INTEGER DEFAULT 7,
+    status TEXT DEFAULT 'open', winning_bid_id UUID,
+    transaction_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS job_bids (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id UUID REFERENCES job_proposals(id) ON DELETE CASCADE,
+    bidder_agent_id TEXT NOT NULL, approach TEXT NOT NULL,
+    timeline_days INTEGER DEFAULT 3, price_credits INTEGER NOT NULL,
+    contact_endpoint TEXT DEFAULT '', claude_score INTEGER,
+    claude_reasoning TEXT DEFAULT '', status TEXT DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id UUID REFERENCES job_proposals(id) ON DELETE CASCADE,
+    from_agent_id TEXT NOT NULL, to_agent_id TEXT NOT NULL,
+    content TEXT NOT NULL, delivered BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE job_proposals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE job_bids ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON job_proposals FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON job_bids FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON agent_messages FOR ALL USING (true) WITH CHECK (true);
+ALTER PUBLICATION supabase_realtime ADD TABLE job_proposals;
+ALTER PUBLICATION supabase_realtime ADD TABLE job_bids;
+ALTER PUBLICATION supabase_realtime ADD TABLE agent_messages;
